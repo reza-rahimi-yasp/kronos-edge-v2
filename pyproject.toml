@@ -5,3 +5,11 @@ requires-python = ">=3.12"
 dependencies = [
     "langgraph",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
