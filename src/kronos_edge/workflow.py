@@ -19,8 +19,14 @@ DEFAULT_ARTIFACTS = Path(".artifact")
 
 
 def success(state: State) -> State:
-    logger.info("eager mode run, ONNX export, and ONNX simplification succeeded")
-    return {"outcome": "success", "customer_message": "Eager mode run, ONNX export, and ONNX simplification succeeded."}
+    precision = state["config"].precision
+    logger.info("all checks succeeded at %s", precision)
+    return {
+        "outcome": "success",
+        "customer_message": (
+            f"Eager run, ONNX export, ONNX simplification, and TensorRT engine build ({precision}) succeeded."
+        ),
+    }
 
 
 def failure(state: State) -> State:

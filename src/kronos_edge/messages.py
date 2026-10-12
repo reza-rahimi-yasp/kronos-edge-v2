@@ -44,6 +44,7 @@ EAGER = {
 
 ONNX = {
     "onnx_exporter": "The ONNX exporter is not available inside the environment container. Contact support.",
+    "onnx_precision": "Your model could not be cast to the requested precision for export. Either fix it or contact support.",
     "onnx_capture": "Your model could not be traced by torch.export for ONNX export. Fix the construct named below.",
     "onnx_convert": "Your model was traced but an operator has no ONNX translation. Replace the operator named below or contact support.",
     "onnx_save": "The exported ONNX model could not be serialized or written to the artifact directory.",
@@ -56,4 +57,11 @@ ONNXSIM = {
     "onnx_simplified_save": "The simplified ONNX model could not be written to the artifact directory.",
 }
 
-CUSTOMER_MESSAGES = merge(ENV, CONTAINER, EAGER, ONNX, ONNXSIM)
+TENSORRT = {
+    "tensorrt_import": "TensorRT is not available inside the environment container. Contact support.",
+    "tensorrt_parse": "TensorRT could not parse the ONNX model. Replace the operator or node named below or contact support.",
+    "tensorrt_build": "TensorRT could not build an engine from the model. The errors it reported are below.",
+    "engine_save": "The TensorRT engine could not be written to the artifact directory.",
+}
+
+CUSTOMER_MESSAGES = merge(ENV, CONTAINER, EAGER, ONNX, ONNXSIM, TENSORRT)

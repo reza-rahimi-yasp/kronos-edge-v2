@@ -9,8 +9,21 @@ decisions: do not add file listings, commands, or summaries here.
 - Two LangGraph graphs: the host graph validates config and environment, the
   container graph runs the model. The host never runs user code.
 - The host must import without torch or numpy. Only the container graph's
-  modules (`eager_check`, `onnx_check`, `onnxsim_check`) import the model
-  stack. A test enforces it.
+  modules (`eager_check`, `onnx_check`, `onnxsim_check`, `tensorrt_check`)
+  import the model stack. A test enforces it.
+- `config.yaml` has two kinds of fields. The five environment fields must
+  equal a registry entry and select the image. Settings such as `precision`
+  are validated by the same schema but never take part in matching; changing
+  a setting re-runs the checks in the same environment and overwrites the
+  artifacts. `config.Config` is the environment schema plus the settings.
+- Precision is applied once, at the ONNX export, by casting a copy of the
+  model and its float inputs. TensorRT 11 has no precision builder flags, so
+  the network is strongly typed and the engine computes in the ONNX's types.
+  The eager model in state is never cast.
+- TensorRT exists only in the image. The real work is one module-level
+  function, `tensorrt_check.build`, that an autouse fixture stubs; tests cover
+  the node around it and the import failure, and the real parse and build
+  paths are verified by a GPU run before each merge.
 - Customer-facing text lives only in `messages.py`, one table per check,
   keyed by stage. Stage names are one flat namespace across all checks;
   `messages.merge()` and a test reject duplicates, and every `stage = "..."`

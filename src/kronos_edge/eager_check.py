@@ -1,4 +1,4 @@
-"""Eager-mode check: load a user's model.py, validate input.npz, run forward, export and simplify ONNX.
+"""Eager-mode check: load model.py, validate input.npz, run forward, export and simplify ONNX, build the engine.
 
 model.py must define ``Model`` (a torch.nn.Module subclass) and
 ``get_inputs()`` or ``get_fwd_args()`` returning the reference inputs.
@@ -16,7 +16,8 @@ import numpy as np
 import torch
 from langgraph.graph import END, START, StateGraph
 
-from kronos_edge import onnx_check, onnxsim_check
+from kronos_edge import onnx_check, onnxsim_check, tensorrt_check
+from kronos_edge.config import PRECISIONS
 from kronos_edge.log import PACKAGE_LOGGER, configure, get_logger
 from kronos_edge.messages import EAGER as CUSTOMER_MESSAGES
 from kronos_edge.state import State, fail, route_on_error
@@ -136,18 +137,23 @@ def build_graph():
     graph.add_node("run_eager", run_eager)
     graph.add_node("export_onnx", onnx_check.export_onnx)
     graph.add_node("simplify_onnx", onnxsim_check.simplify_onnx)
+    graph.add_node("build_engine", tensorrt_check.build_engine)
     graph.add_edge(START, "load_model")
     graph.add_conditional_edges("load_model", route_on_error, {"ok": "validate_inputs", "failure": END})
     graph.add_conditional_edges("validate_inputs", route_on_error, {"ok": "run_eager", "failure": END})
     graph.add_conditional_edges("run_eager", route_on_error, {"ok": "export_onnx", "failure": END})
     graph.add_conditional_edges("export_onnx", route_on_error, {"ok": "simplify_onnx", "failure": END})
-    graph.add_edge("simplify_onnx", END)
+    graph.add_conditional_edges("simplify_onnx", route_on_error, {"ok": "build_engine", "failure": END})
+    graph.add_edge("build_engine", END)
     return graph.compile()
 
 
-def run(model_path, npz_path, artifacts_dir, device: str = "cpu") -> State:
+def run(model_path, npz_path, artifacts_dir, precision: str = "fp32", device: str = "cpu") -> State:
     return build_graph().invoke(
-        {"model_path": str(model_path), "npz_path": str(npz_path), "artifacts_dir": str(artifacts_dir), "device": device}
+        {
+            "model_path": str(model_path), "npz_path": str(npz_path), "artifacts_dir": str(artifacts_dir),
+            "precision": precision, "device": device,
+        }
     )
 
 
@@ -162,11 +168,12 @@ def main(argv=None) -> int:
     parser.add_argument("npz_path")
     parser.add_argument("--report", required=True, help="where to write the JSON report")
     parser.add_argument("--artifacts", required=True, help="existing directory for the files the checks produce")
+    parser.add_argument("--precision", required=True, choices=PRECISIONS, help="TensorRT engine precision")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args(argv)
     configure(args.log_level)
-    state = run(args.model_path, args.npz_path, args.artifacts, device=args.device)
+    state = run(args.model_path, args.npz_path, args.artifacts, precision=args.precision, device=args.device)
     with open(args.report, "w") as f:
         f.write(report(state))
     return 0 if state.get("error") is None else 1
