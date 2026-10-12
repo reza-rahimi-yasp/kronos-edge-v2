@@ -46,6 +46,14 @@ ONNX = {
     "onnx_exporter": "The ONNX exporter is not available inside the environment container. Contact support.",
     "onnx_capture": "Your model could not be traced by torch.export for ONNX export. Fix the construct named below.",
     "onnx_convert": "Your model was traced but an operator has no ONNX translation. Replace the operator named below or contact support.",
+    "onnx_save": "The exported ONNX model could not be serialized or written to the artifact directory.",
 }
 
-CUSTOMER_MESSAGES = merge(ENV, CONTAINER, EAGER, ONNX)
+ONNXSIM = {
+    "onnx_simplifier": "The ONNX simplifier is not available inside the environment container. Contact support.",
+    "onnx_simplify": "The ONNX model could not be simplified by onnxsim. Either fix the model or contact support.",
+    "onnx_simplified_invalid": "onnxsim produced a simplified model that does not pass its check or the ONNX checker. Contact support.",
+    "onnx_simplified_save": "The simplified ONNX model could not be written to the artifact directory.",
+}
+
+CUSTOMER_MESSAGES = merge(ENV, CONTAINER, EAGER, ONNX, ONNXSIM)

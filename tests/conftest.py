@@ -59,6 +59,12 @@ def reset_package_logger():
 
 
 @pytest.fixture(autouse=True)
+def run_in_tmp_path(tmp_path, monkeypatch):
+    """The default artifact directory is relative to the working directory; keep it out of the repo."""
+    monkeypatch.chdir(tmp_path)
+
+
+@pytest.fixture(autouse=True)
 def host_matches_registry(monkeypatch):
     """Tests never touch docker or nvidia-smi; the host looks like the registry entry."""
     monkeypatch.setattr(env_check, "image_exists", lambda image: True)
@@ -69,8 +75,8 @@ def host_matches_registry(monkeypatch):
 def eager_check_runs_in_process(monkeypatch):
     """Stand in for `docker run`: run the eager sub-graph here, on CPU, write its report, return its exit code."""
 
-    def fake_run_container(image, model_path, npz_path, report_dir, device, log_level):
-        state = eager_check.run(model_path, npz_path, device="cpu")
+    def fake_run_container(image, model_path, npz_path, report_dir, artifacts_dir, device, log_level):
+        state = eager_check.run(model_path, npz_path, artifacts_dir, device="cpu")
         (Path(report_dir) / container.REPORT_FILE).write_text(eager_check.report(state))
         return 0 if state.get("error") is None else 1
 
@@ -83,6 +89,14 @@ def env_files(tmp_path):
     config = write_yaml(tmp_path / "config.yaml", dict(ENVIRONMENT))
     environments = write_yaml(tmp_path / "environments.yaml", REGISTRY)
     return config, environments
+
+
+@pytest.fixture
+def artifacts(tmp_path):
+    """An existing artifact directory, as the container sees the one the host created and mounted."""
+    path = tmp_path / "art"
+    path.mkdir()
+    return path
 
 
 @pytest.fixture

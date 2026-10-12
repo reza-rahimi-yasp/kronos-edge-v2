@@ -15,11 +15,12 @@ from kronos_edge.state import State, route_on_error
 logger = get_logger(f"{PACKAGE_LOGGER}.workflow")
 
 DEFAULT_ENVIRONMENTS = Path(__file__).with_name("environments.yaml")
+DEFAULT_ARTIFACTS = Path(".artifact")
 
 
 def success(state: State) -> State:
-    logger.info("eager mode run and ONNX export succeeded")
-    return {"outcome": "success", "customer_message": "Eager mode run and ONNX export succeeded."}
+    logger.info("eager mode run, ONNX export, and ONNX simplification succeeded")
+    return {"outcome": "success", "customer_message": "Eager mode run, ONNX export, and ONNX simplification succeeded."}
 
 
 def failure(state: State) -> State:
@@ -43,13 +44,17 @@ def build_graph():
     return graph.compile()
 
 
-def run_check(config_path, model_path, npz_path, environments_path=DEFAULT_ENVIRONMENTS, log_level="INFO") -> State:
+def run_check(
+    config_path, model_path, npz_path,
+    environments_path=DEFAULT_ENVIRONMENTS, artifacts_path=DEFAULT_ARTIFACTS, log_level="INFO",
+) -> State:
     return build_graph().invoke(
         {
             "config_path": str(config_path),
             "environments_path": str(environments_path),
             "model_path": str(model_path),
             "npz_path": str(npz_path),
+            "artifacts_path": str(artifacts_path),
             "log_level": log_level,
         }
     )
@@ -61,12 +66,13 @@ def main(argv=None) -> int:
     parser.add_argument("model_path")
     parser.add_argument("npz_path")
     parser.add_argument("--environments", default=DEFAULT_ENVIRONMENTS, help="registry of supported environments")
+    parser.add_argument("--artifacts", default=DEFAULT_ARTIFACTS, help="directory for the files the checks produce")
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args(argv)
     configure(args.log_level)
     state = run_check(
         args.config_path, args.model_path, args.npz_path,
-        environments_path=args.environments, log_level=args.log_level,
+        environments_path=args.environments, artifacts_path=args.artifacts, log_level=args.log_level,
     )
     print(state["customer_message"])
     return 0 if state["outcome"] == "success" else 1

@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from conftest import GOOD_MODEL
-from kronos_edge import container, eager_check
+from kronos_edge import artifacts, container, eager_check, onnxsim_check
 from kronos_edge.workflow import run_check
 
 TYPO_MODEL = GOOD_MODEL.replace("return self.conv(x)", "return self.convv(x)")
@@ -33,7 +33,7 @@ def run(env_files, good_model):
 def fake_container(monkeypatch, report=None, code=0):
     """Replace docker run with something that writes `report` (if given) and exits with `code`."""
 
-    def fake(image, model_path, npz_path, report_dir, device, log_level):
+    def fake(image, model_path, npz_path, report_dir, artifacts_dir, device, log_level):
         if report is not None:
             (Path(report_dir) / container.REPORT_FILE).write_text(report)
         return code
@@ -42,19 +42,102 @@ def fake_container(monkeypatch, report=None, code=0):
 
 
 def test_build_command_mounts_files_and_requests_gpu(tmp_path):
-    model, npz, out = tmp_path / "m.py", tmp_path / "i.npz", tmp_path / "out"
+    model, npz, out, artifacts = tmp_path / "m.py", tmp_path / "i.npz", tmp_path / "out", tmp_path / ".artifact"
 
-    cmd = container.build_command("kronos-edge:x", model, npz, out, "cuda", "DEBUG")
+    cmd = container.build_command("kronos-edge:x", model, npz, out, artifacts, "cuda", "DEBUG")
 
     assert cmd[:3] == ["docker", "run", "--rm"]
     assert cmd[cmd.index("--gpus") + 1] == "all"
     assert f"{model.resolve()}:/work/model.py:ro" in cmd
     assert f"{npz.resolve()}:/work/input.npz:ro" in cmd
     assert f"{out.resolve()}:/work/out" in cmd
+    assert f"{artifacts.resolve()}:/work/artifact" in cmd
     assert cmd[cmd.index("kronos-edge:x") + 1:] == [
         "python", "-m", "kronos_edge.eager_check", "/work/model.py", "/work/input.npz",
-        "--report", "/work/out/report.json", "--device", "cuda", "--log-level", "DEBUG",
+        "--report", "/work/out/report.json", "--artifacts", "/work/artifact",
+        "--device", "cuda", "--log-level", "DEBUG",
     ]
+
+
+def test_rerun_clears_managed_files_but_keeps_the_users_own(monkeypatch, tmp_path, env_files, good_model):
+    """A second run in the same directory must not leave the first run's outputs next to the new ones."""
+    config, environments = env_files
+    model, npz = good_model
+    art = tmp_path / ".artifact"
+    first = run_check(config, model, npz, environments_path=environments, artifacts_path=art)
+    assert first["outcome"] == "success"
+    assert sorted(f.name for f in art.iterdir()) == ["model.onnx", "model_simplified.onnx"]
+    (art / "notes.txt").write_text("mine")
+    (art / "model.onnx.data").write_bytes(b"stale companion")
+
+    def simplify_fails(model):
+        raise RuntimeError("second run cannot simplify")
+
+    monkeypatch.setattr(onnxsim_check, "simplify", simplify_fails)
+
+    second = run_check(config, model, npz, environments_path=environments, artifacts_path=art)
+
+    assert second["error"] == "onnx_simplify"
+    assert sorted(f.name for f in art.iterdir()) == ["model.onnx", "notes.txt"]
+
+
+def test_managed_files_are_cleared_even_if_the_container_fails_to_start(monkeypatch, tmp_path, env_files, good_model):
+    config, environments = env_files
+    art = tmp_path / ".artifact"
+    art.mkdir()
+    for name in artifacts.MANAGED_FILES:
+        (art / name).write_bytes(b"stale")
+    fake_container(monkeypatch, None, 1)
+
+    state = run_check(config, *good_model, environments_path=environments, artifacts_path=art)
+
+    assert state["error"] == "container_run"
+    assert list(art.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "blocked, stage",
+    [
+        pytest.param("onnxscript", "onnx_exporter", id="exporter_missing"),
+        pytest.param("onnxsim", "onnx_simplifier", id="simplifier_missing"),
+    ],
+)
+def test_missing_dependency_reaches_the_report(tmp_path, good_model, artifacts, blocked, stage):
+    """Dependency imports happen inside the nodes, so a missing package is a stage, not a startup crash."""
+    model, npz = good_model
+    report_path = tmp_path / "report.json"
+    code = (
+        f"import sys; sys.modules[{blocked!r}] = None\n"
+        "from kronos_edge.eager_check import main\n"
+        f"sys.exit(main([{str(model)!r}, {str(npz)!r}, '--report', {str(report_path)!r}, "
+        f"'--artifacts', {str(artifacts)!r}, '--device', 'cpu']))\n"
+    )
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
+
+    result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+
+    assert result.returncode == 1, result.stderr
+    report = json.loads(report_path.read_text())
+    assert report["error"] == stage
+    assert blocked in report["error_detail"]
+
+
+def test_artifact_directory_is_created_before_the_container_runs(monkeypatch, tmp_path, env_files, good_model):
+    seen = {}
+
+    def fake(image, model_path, npz_path, report_dir, artifacts_dir, device, log_level):
+        seen["exists"] = Path(artifacts_dir).is_dir()
+        (Path(report_dir) / container.REPORT_FILE).write_text('{"error": null}')
+        return 0
+
+    monkeypatch.setattr(container, "run_container", fake)
+    config, environments = env_files
+    artifacts = tmp_path / "nested" / ".artifact"
+
+    state = run_check(config, *good_model, environments_path=environments, artifacts_path=artifacts)
+
+    assert state["outcome"] == "success"
+    assert seen["exists"] and artifacts.is_dir()
 
 
 def test_docker_failure_is_reported(monkeypatch, caplog, env_files, good_model):
@@ -121,9 +204,9 @@ def test_inner_failure_passes_through_without_a_host_error(monkeypatch, caplog, 
 def test_container_runs_on_cuda(monkeypatch, env_files, good_model):
     seen = {}
 
-    def record(image, model_path, npz_path, report_dir, device, log_level):
+    def record(image, model_path, npz_path, report_dir, artifacts_dir, device, log_level):
         seen.update(image=image, device=device)
-        state = eager_check.run(model_path, npz_path, device="cpu")
+        state = eager_check.run(model_path, npz_path, artifacts_dir, device="cpu")
         (Path(report_dir) / container.REPORT_FILE).write_text(eager_check.report(state))
         return 0
 
@@ -142,13 +225,13 @@ def test_container_runs_on_cuda(monkeypatch, env_files, good_model):
         pytest.param(TYPO_MODEL, 1, "forward", id="failure"),
     ],
 )
-def test_eager_main_writes_json_report(tmp_path, good_model, source, code, error):
+def test_eager_main_writes_json_report(tmp_path, good_model, artifacts, source, code, error):
     _, npz = good_model
     model = tmp_path / "model.py"
     model.write_text(source)
     report_path = tmp_path / "report.json"
 
-    exit_code = eager_check.main([str(model), str(npz), "--report", str(report_path), "--device", "cpu"])
+    exit_code = eager_check.main([str(model), str(npz), "--report", str(report_path), "--artifacts", str(artifacts), "--device", "cpu"])
 
     report = json.loads(report_path.read_text())
     assert exit_code == code
@@ -156,7 +239,7 @@ def test_eager_main_writes_json_report(tmp_path, good_model, source, code, error
     assert ("convv" in report["error_detail"]) == (error is not None)
 
 
-def test_user_prints_do_not_corrupt_the_report(tmp_path, good_model):
+def test_user_prints_do_not_corrupt_the_report(tmp_path, good_model, artifacts):
     """Real subprocess, like the container: user code printing on stdout must not affect the report."""
     _, npz = good_model
     model = tmp_path / "model.py"
@@ -166,7 +249,7 @@ def test_user_prints_do_not_corrupt_the_report(tmp_path, good_model):
 
     result = subprocess.run(
         [sys.executable, "-m", "kronos_edge.eager_check", str(model), str(npz),
-         "--report", str(report_path), "--device", "cpu"],
+         "--report", str(report_path), "--artifacts", str(artifacts), "--device", "cpu"],
         env=env, capture_output=True, text=True,
     )
 
@@ -174,13 +257,13 @@ def test_user_prints_do_not_corrupt_the_report(tmp_path, good_model):
     assert "loading without newline" in result.stdout and "bye from atexit" in result.stdout
     assert json.loads(report_path.read_text()) == {"error": None, "error_detail": ""}
     assert "[torch.onnx]" not in result.stdout
-    assert list(tmp_path.rglob("*.onnx")) == []
+    assert sorted(f.name for f in artifacts.iterdir()) == ["model.onnx", "model_simplified.onnx"]
 
 
-def test_cuda_unavailable_is_its_own_stage(monkeypatch, good_model):
+def test_cuda_unavailable_is_its_own_stage(monkeypatch, good_model, artifacts):
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
 
-    state = eager_check.run(*good_model, device="cuda")
+    state = eager_check.run(*good_model, artifacts, device="cuda")
 
     assert state["error"] == "select_device"
     assert "cuda" in state["error_detail"]

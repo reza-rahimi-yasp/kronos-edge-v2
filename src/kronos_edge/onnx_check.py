@@ -1,15 +1,20 @@
 """ONNX export check: export the eagerly-run model with the dynamo exporter.
 
 Runs inside the container after the eager check, on the model and inputs
-already in state. The exported program is discarded; only success or the
-failure stage and its cause are reported.
+already in state. The exported model stays in state for the next node and is
+written to the artifact directory as ``model.onnx`` through
+``ONNXProgram.save``, which moves the weights to a companion ``.data`` file
+when they exceed the protobuf limit. onnx and onnxscript are imported lazily
+by the exporter, so a missing package is the ``onnx_exporter`` stage.
 """
 
 import re
+from pathlib import Path
 
 import torch
 from torch.onnx._internal.exporter._errors import TorchExportError
 
+from kronos_edge.artifacts import EXPORTED_FILE
 from kronos_edge.log import PACKAGE_LOGGER, get_logger
 from kronos_edge.messages import ONNX as CUSTOMER_MESSAGES
 from kronos_edge.state import State, fail
@@ -22,7 +27,7 @@ _SUMMARY = "## Exception summary"
 
 
 def export(model, inputs):
-    """Export with torch.onnx (dynamo=True) under no_grad, like the eager pass; nothing is written."""
+    """Export with torch.onnx (dynamo=True) under no_grad, like the eager pass; returns the ONNXProgram."""
     with torch.no_grad():
         return torch.onnx.export(model, inputs, None, dynamo=True, verbose=False, report=False, verify=False)
 
@@ -41,7 +46,7 @@ def export_onnx(state: State) -> State:
     try:
         logger.info("exporting to ONNX with dynamo=True", extra={"stage": stage})
         try:
-            export(state["model"], state["user_inputs"])
+            program = export(state["model"], state["user_inputs"])
         except ImportError:
             # The dynamo exporter imports onnx and onnxscript lazily; the image lacks them.
             stage = "onnx_exporter"
@@ -51,6 +56,12 @@ def export_onnx(state: State) -> State:
         except Exception as exc:
             stage = "onnx_convert"
             raise OnnxExportFailed(exc) from exc
+
+        stage = "onnx_save"
+        path = Path(state["artifacts_dir"]) / EXPORTED_FILE
+        program.save(path)
+        logger.info("wrote %s", path, extra={"stage": stage})
+        model = program.model_proto  # materializes the IR; guarded so a failure is still a stage
     except Exception as exc:
         return fail(logger, stage, exc)
-    return {}
+    return {"onnx_model": model}
