@@ -1,4 +1,5 @@
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pytest
@@ -100,8 +101,8 @@ def write_npz(tmp_path, arrays):
     return path
 
 
-def error_records(state):
-    return [r for r in state["collector"].records if r.levelno >= logging.ERROR]
+def error_records(caplog):
+    return [r for r in caplog.records if r.levelno >= logging.ERROR and r.name.startswith("kronos_edge")]
 
 
 @pytest.mark.parametrize(
@@ -113,13 +114,13 @@ def error_records(state):
         pytest.param(TWO_INPUTS, XY, id="two_inputs"),
     ],
 )
-def test_success(tmp_path, source, arrays):
+def test_success(tmp_path, caplog, source, arrays):
     state = run_check(write_model(tmp_path, source), write_npz(tmp_path, arrays))
 
     assert state["outcome"] == "success"
     assert state.get("error") is None
     assert "succeeded" in state["customer_message"]
-    assert error_records(state) == []
+    assert error_records(caplog) == []
 
 
 @pytest.mark.parametrize(
@@ -140,13 +141,13 @@ def test_success(tmp_path, source, arrays):
         pytest.param(CONV_RELU, [np.zeros((1, 3, 8, 8), dtype=np.float64)], "validate_inputs", "dtype", id="dtype_mismatch"),
     ],
 )
-def test_failure(tmp_path, source, arrays, stage, fragment):
+def test_failure(tmp_path, caplog, source, arrays, stage, fragment):
     state = run_check(write_model(tmp_path, source), write_npz(tmp_path, arrays))
 
     assert state["outcome"] == "failure"
     assert state["error"] == stage
     assert fragment in state["customer_message"]
-    records = error_records(state)
+    records = error_records(caplog)
     assert len(records) == 1
     assert records[0].stage == stage
 
@@ -162,6 +163,24 @@ def test_init_inputs_missing_names_required_arguments(tmp_path):
 
     assert "in_channels" in state["customer_message"]
     assert "out_channels" in state["customer_message"]
+
+
+def test_concurrent_runs_do_not_share_failure_details(tmp_path):
+    typo_dir, no_model_dir = tmp_path / "typo", tmp_path / "no_model"
+    typo_dir.mkdir()
+    no_model_dir.mkdir()
+    jobs = [
+        (write_model(typo_dir, TYPO), write_npz(typo_dir, [X])),
+        (write_model(no_model_dir, NO_MODEL_CLASS), write_npz(no_model_dir, [X])),
+    ]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        typo_state, no_model_state = list(pool.map(lambda job: run_check(*job), jobs))
+
+    assert typo_state["error"] == "forward"
+    assert "relo" in typo_state["customer_message"]
+    assert no_model_state["error"] == "find_model_class"
+    assert "relo" not in no_model_state["customer_message"]
 
 
 def test_route_on_error():

@@ -1,12 +1,11 @@
 """Workflow: compose the checks into a LangGraph and expose the CLI."""
 
 import argparse
-import logging
 
 from langgraph.graph import END, START, StateGraph
 
 from kronos_edge import eager_check
-from kronos_edge.log import PACKAGE_LOGGER, ErrorCollector, configure, get_logger
+from kronos_edge.log import PACKAGE_LOGGER, configure, get_logger
 from kronos_edge.state import State, route_on_error
 
 # Explicit name: under ``python -m`` this module's __name__ is "__main__",
@@ -22,10 +21,7 @@ def success(state: State) -> State:
 
 
 def failure(state: State) -> State:
-    records = [r for r in state["collector"].records if r.levelno >= logging.ERROR]
-    stage = records[0].stage if records else state["error"]
-    detail = records[0].getMessage() if records else ""
-    message = f"{CUSTOMER_MESSAGES[stage]}\n{detail}".rstrip()
+    message = f"{CUSTOMER_MESSAGES[state['error']]}\n{state['error_detail']}"
     return {"outcome": "failure", "customer_message": message}
 
 
@@ -46,15 +42,7 @@ def build_graph():
 
 
 def run_check(model_path, npz_path) -> State:
-    collector = ErrorCollector()
-    package_logger = logging.getLogger(PACKAGE_LOGGER)
-    package_logger.addHandler(collector)
-    try:
-        return build_graph().invoke(
-            {"model_path": str(model_path), "npz_path": str(npz_path), "collector": collector}
-        )
-    finally:
-        package_logger.removeHandler(collector)
+    return build_graph().invoke({"model_path": str(model_path), "npz_path": str(npz_path)})
 
 
 def main(argv=None) -> int:

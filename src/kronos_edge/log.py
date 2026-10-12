@@ -2,8 +2,7 @@
 
 Call ``configure()`` once at startup, then ``get_logger(__name__)`` in each
 module. Loggers gain a ``trace()`` level below DEBUG. Pass
-``extra={"stage": "..."}`` to tag a record; attach an ``ErrorCollector`` to
-the ``"kronos_edge"`` logger to collect WARNING-and-above records for a run.
+``extra={"stage": "..."}`` to tag a record.
 """
 
 import logging
@@ -49,14 +48,3 @@ def configure(level: int | str = "INFO") -> None:
     handler.addFilter(_StageFilter())
     handler._kronos_edge = True
     logger.addHandler(handler)
-
-
-class ErrorCollector(logging.Handler):
-    """Keep every WARNING-or-higher record in ``self.records``."""
-
-    def __init__(self):
-        super().__init__(level=logging.WARNING)
-        self.records: list[logging.LogRecord] = []
-
-    def emit(self, record):
-        self.records.append(record)
