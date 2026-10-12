@@ -29,6 +29,25 @@ UNSUPPORTED_OP = DATA_DEPENDENT.replace(
     "        if x.sum() > 0:\n            return x * 2\n        return -x", "        return torch.special.airy_ai(x)"
 )
 
+# Mutates a parameter in place in forward: fine under no_grad, an error if gradients are enabled.
+INPLACE_PARAM = """
+import torch
+
+
+class Model(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.randn(1, 3, 8, 8))
+
+    def forward(self, x):
+        self.weight.clamp_(min=0)
+        return x * self.weight
+
+
+def get_inputs():
+    return [torch.randn(1, 3, 8, 8)]
+"""
+
 
 def onnx_files(*dirs):
     return sorted(f for d in dirs for f in Path(d).rglob("*.onnx"))
@@ -53,6 +72,13 @@ def test_failure_names_the_stage_and_the_cause(tmp_path, caplog, env_files, sour
     records = error_records(caplog)
     assert len(records) == 1
     assert records[0].stage == stage
+
+
+def test_export_runs_without_gradients_like_the_eager_pass(tmp_path, env_files):
+    state = run(env_files, write_model(tmp_path, INPLACE_PARAM), write_npz(tmp_path, [X]))
+
+    assert state.get("error") is None
+    assert state["outcome"] == "success"
 
 
 def test_missing_exporter_is_a_support_failure(tmp_path, monkeypatch, env_files):

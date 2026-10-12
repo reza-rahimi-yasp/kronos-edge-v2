@@ -22,8 +22,9 @@ _SUMMARY = "## Exception summary"
 
 
 def export(model, inputs):
-    """Export with torch.onnx (dynamo=True); nothing is written, the program is returned."""
-    return torch.onnx.export(model, inputs, None, dynamo=True, verbose=False, report=False, verify=False)
+    """Export with torch.onnx (dynamo=True) under no_grad, like the eager pass; nothing is written."""
+    with torch.no_grad():
+        return torch.onnx.export(model, inputs, None, dynamo=True, verbose=False, report=False, verify=False)
 
 
 class OnnxExportFailed(RuntimeError):
