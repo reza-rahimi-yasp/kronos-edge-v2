@@ -155,20 +155,22 @@ def run(model_path, npz_path, device: str = "cpu") -> State:
 
 
 def report(state: State) -> str:
-    """One JSON line the host parses: the failure stage and detail, or no error."""
+    """The JSON document the host reads: the failure stage and detail, or no error."""
     return json.dumps({"error": state.get("error"), "error_detail": state.get("error_detail", "")})
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Run the eager check and print a JSON report.")
+    parser = argparse.ArgumentParser(description="Run the eager check and write a JSON report.")
     parser.add_argument("model_path")
     parser.add_argument("npz_path")
+    parser.add_argument("--report", required=True, help="where to write the JSON report")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args(argv)
     configure(args.log_level)
     state = run(args.model_path, args.npz_path, device=args.device)
-    print(report(state))
+    with open(args.report, "w") as f:
+        f.write(report(state))
     return 0 if state.get("error") is None else 1
 
 
