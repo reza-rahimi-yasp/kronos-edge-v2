@@ -5,8 +5,9 @@ from pathlib import Path
 
 from langgraph.graph import END, START, StateGraph
 
-from kronos_edge import container, eager_check, env_check
+from kronos_edge import container, env_check
 from kronos_edge.log import PACKAGE_LOGGER, configure, get_logger
+from kronos_edge.messages import CUSTOMER_MESSAGES
 from kronos_edge.state import State, route_on_error
 
 # Explicit name: under ``python -m`` this module's __name__ is "__main__",
@@ -14,8 +15,6 @@ from kronos_edge.state import State, route_on_error
 logger = get_logger(f"{PACKAGE_LOGGER}.workflow")
 
 DEFAULT_ENVIRONMENTS = Path(__file__).with_name("environments.yaml")
-
-CUSTOMER_MESSAGES = {**env_check.CUSTOMER_MESSAGES, **container.CUSTOMER_MESSAGES, **eager_check.CUSTOMER_MESSAGES}
 
 
 def success(state: State) -> State:
