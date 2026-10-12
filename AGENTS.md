@@ -4,8 +4,9 @@ Instructions for AI coding agents working in this repository.
 
 ## What this repo is
 
-A LangGraph state machine that checks whether a user's PyTorch `model.py`
-runs in eager mode with the inputs in their `input.npz`. `README.md` has the
+A LangGraph state machine that validates a user's `config.yaml` against the
+supported environments, then checks whether their PyTorch `model.py` runs in
+eager mode with the inputs in their `input.npz`. `README.md` has the
 user-facing contract and how to run it. `architecture.md` has the state
 diagram, the component list, the failure stages, and how to add a check.
 
@@ -15,9 +16,14 @@ diagram, the component list, the failure stages, and how to add a check.
 |---|---|
 | `src/kronos_edge/log.py` | Logging wrapper. `TRACE` level, `configure()`, `get_logger()`, and the `stage` record field. |
 | `src/kronos_edge/state.py` | Shared `State`, `route_on_error()`, `fail()`. Must not import the other two modules. |
+| `src/kronos_edge/config.py` | Pydantic schema for `config.yaml` and the registry; `parse_config()`, `load_environments()`. |
+| `src/kronos_edge/environments.yaml` | Registry of supported environments. One entry today. Must agree with its Dockerfile. |
+| `src/kronos_edge/env_check.py` | The environment check nodes, their `CUSTOMER_MESSAGES`, and the `docker` and `nvidia-smi` probes. |
+| `docker/<name>/Dockerfile` | One per registry entry, pinning the entry's CUDA, TensorRT, and torch versions. `.dockerignore` keeps `.venv` out of the build context. |
 | `src/kronos_edge/eager_check.py` | The eager check nodes, `InvalidUserInputs`, and its `CUSTOMER_MESSAGES`. |
 | `src/kronos_edge/workflow.py` | Graph assembly, `success` and `failure` nodes, `run_check()`, CLI `main()`. |
-| `tests/test_eager_check.py` | All tests. Fixtures are source strings written to `tmp_path`; nothing binary is committed. |
+| `tests/conftest.py` | Shared fixtures. Autouse patches replace `env_check.image_exists` and `env_check.host_gpu`, so tests never shell out. |
+| `tests/test_env_check.py`, `tests/test_eager_check.py` | All tests. Fixtures are source strings written to `tmp_path`; nothing binary is committed. |
 | `pyproject.toml` | Runtime deps, a `dev` dependency group with pytest, and `pythonpath = ["src"]` for pytest. No build system. |
 | `requirements.txt` | Pinned runtime deps, kept in sync with `pyproject.toml`. |
 
@@ -25,7 +31,8 @@ diagram, the component list, the failure stages, and how to add a check.
 
 ```bash
 .venv/bin/pytest                                  # all tests
-PYTHONPATH=src .venv/bin/python -m kronos_edge.workflow model.py input.npz
+PYTHONPATH=src .venv/bin/python -m kronos_edge.workflow config.yaml model.py input.npz
+docker build -f docker/rtx5090-cuda130/Dockerfile -t kronos-edge:rtx5090-cuda130 .
 ```
 
 A gitignored `.venv` is expected at the repo root. Do not add lockfiles.
@@ -40,6 +47,10 @@ A gitignored `.venv` is expected at the repo root. Do not add lockfiles.
   `extra={"stage": ...}`. A module that can run under `python -m` must name
   its logger explicitly, because `__name__` becomes `__main__` there.
 - Customer-facing text lives only in `CUSTOMER_MESSAGES` tables, keyed by stage.
+- A registry entry, its Dockerfile, and the image labels must state the same
+  versions. Change all three together.
+- Anything that shells out (`docker`, `nvidia-smi`) is a module-level function
+  so tests can replace it with `monkeypatch`.
 - Tests come first: add the scenario to the parametrized table, see it fail,
   then implement.
 - Branch off `main`, one PR per concern, commits that each do one thing.
