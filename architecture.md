@@ -73,8 +73,9 @@ Run by `python -m kronos_edge.eager_check` with `--device cuda` and the
   `load_npz`, `validate_inputs`.
 - `run_eager` (`eager_check.py`): one forward pass under `torch.no_grad()`.
   Stage: `forward`.
-- `export_onnx` (`onnx_check.py`): for `fp16`, casts a copy of the model and
-  its float inputs to half, leaving the eager model in state untouched; then
+- `export_onnx` (`onnx_check.py`): casts a copy of the model and its float
+  inputs to the configured precision unless they already have it, leaving
+  the eager model in state untouched; then
   `torch.onnx.export(..., dynamo=True)`; keeps the `ModelProto` in state and
   writes `model.onnx` with `ONNXProgram.save`, external data above 2 GB.
   Stages: `onnx_precision`, `onnx_exporter`, `onnx_capture`, `onnx_convert`,
@@ -86,8 +87,9 @@ Run by `python -m kronos_edge.eager_check` with `--device cuda` and the
   `onnx_simplified_save`.
 - `build_engine` (`tensorrt_check.py`): parses `model_simplified.onnx` from
   the artifact directory into a strongly typed TensorRT network, so the
-  engine's precision is the ONNX's, builds a serialized engine, keeps the
-  bytes in state, and writes `model.engine`. TensorRT's own log is forwarded to ours
+  engine's precision is the ONNX's, pins shape inputs and dynamic dimensions
+  to the user's inputs with an optimization profile, builds a serialized
+  engine, keeps the bytes in state, and writes `model.engine`. TensorRT's own log is forwarded to ours
   and its errors become the customer detail. Stages: `tensorrt_import`,
   `tensorrt_parse`, `tensorrt_build`, `engine_save`.
 - `report` (`eager_check.main`): writes `error` and `error_detail` to

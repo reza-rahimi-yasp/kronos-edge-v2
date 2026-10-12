@@ -199,6 +199,45 @@ def test_fp16_casts_a_copy_for_export_and_keeps_the_eager_model_fp32(monkeypatch
     assert exported.graph.input[0].type.tensor_type.elem_type == onnx.TensorProto.FLOAT16
 
 
+HALF_MODEL = CONV_RELU.replace("self.relu = torch.nn.ReLU()", "self.relu = torch.nn.ReLU()\n        self.half()").replace(
+    "return [torch.randn(1, 3, 8, 8)]", "return [torch.randn(1, 3, 8, 8).half()]"
+)
+
+
+def test_fp32_casts_a_half_model_up_and_keeps_the_eager_model_half(monkeypatch, tmp_path, artifacts):
+    """Selecting fp32 must apply fp32, not merely leave whatever the model already is."""
+    model = write_model(tmp_path, HALF_MODEL)
+    npz = write_npz(tmp_path, [X.astype(np.float16)])
+    seen = {}
+    real_export = onnx_check.export
+
+    def recording_export(m, inputs):
+        seen["param_dtype"] = next(m.parameters()).dtype
+        seen["input_dtypes"] = [t.dtype for t in inputs]
+        return real_export(m, inputs)
+
+    monkeypatch.setattr(onnx_check, "export", recording_export)
+
+    state = eager_check.run(model, npz, artifacts, precision="fp32", device="cpu")
+
+    assert state.get("error") is None
+    assert seen == {"param_dtype": torch.float32, "input_dtypes": [torch.float32]}
+    assert next(state["model"].parameters()).dtype == torch.float16
+    assert [t.dtype for t in state["user_inputs"]] == [torch.float16]
+    assert onnx.load(artifacts / "model.onnx").graph.input[0].type.tensor_type.elem_type == onnx.TensorProto.FLOAT
+
+
+def test_no_copy_when_the_model_already_has_the_precision(monkeypatch, good_model, artifacts):
+    seen = {}
+    real_export = onnx_check.export
+    monkeypatch.setattr(onnx_check, "export", lambda m, inputs: seen.setdefault("model", m) and real_export(m, inputs))
+
+    state = eager_check.run(*good_model, artifacts, precision="fp32", device="cpu")
+
+    assert state.get("error") is None
+    assert seen["model"] is state["model"]
+
+
 def test_fp16_leaves_integer_inputs_alone(monkeypatch, tmp_path, artifacts):
     model = tmp_path / "model.py"
     model.write_text(
@@ -219,7 +258,7 @@ def test_fp16_leaves_integer_inputs_alone(monkeypatch, tmp_path, artifacts):
 
 
 def test_cast_failure_is_its_own_stage(monkeypatch, caplog, good_model, artifacts):
-    def refuse_half(model):
+    def refuse_half(model, dtype):
         raise RuntimeError("this module cannot be cast to half")
 
     monkeypatch.setattr(onnx_check, "cast_copy", refuse_half)

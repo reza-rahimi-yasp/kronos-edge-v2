@@ -5,8 +5,11 @@ model is parsed from its file in the artifact directory, so external weight
 data is found next to it. The network is strongly typed: the engine computes
 in the tensor types the ONNX carries, which is how the configured precision
 reaches it (TensorRT 11 has no FP16 builder flag; the cast happens at the
-ONNX export). The serialized engine is written as ``model.engine`` and kept
-in state for the next node.
+ONNX export). An input the model uses as a shape (its values decide a
+tensor's shape) needs an optimization profile; the user's input values are
+used for it, so the engine is built for exactly the supplied inputs. The
+serialized engine is written as ``model.engine`` and kept in state for the
+next node.
 
 tensorrt is imported inside ``build``, so a missing package reaches the
 report as the ``tensorrt_import`` stage instead of crashing the container.
@@ -32,8 +35,13 @@ class TensorRTBuildError(RuntimeError):
     """The builder produced no engine; the message lists the errors TensorRT logged."""
 
 
-def build(onnx_path) -> bytes:
-    """Parse the ONNX file into a strongly typed network and build a serialized engine."""
+def build(onnx_path, inputs) -> bytes:
+    """Parse the ONNX file into a strongly typed network and build a serialized engine.
+
+    ``inputs`` are the user's tensors in forward-argument order, the order of
+    the network inputs; they supply the profile for shape inputs and for any
+    dynamic dimension.
+    """
     import tensorrt as trt
 
     class Forwarding(trt.ILogger):
@@ -59,10 +67,37 @@ def build(onnx_path) -> bytes:
     if not parser.parse_from_file(str(onnx_path)):
         errors = [str(parser.get_error(i)) for i in range(parser.num_errors)]
         raise TensorRTParseError("; ".join(errors) or "the parser failed without an error message")
-    engine = builder.build_serialized_network(network, builder.create_builder_config())
+    config = builder.create_builder_config()
+    profile = _profile(trt, builder, network, inputs)
+    if profile is not None:
+        config.add_optimization_profile(profile)
+    engine = builder.build_serialized_network(network, config)
     if engine is None:
         raise TensorRTBuildError("; ".join(log.errors) or "the builder returned no engine")
     return bytes(engine)
+
+
+def _profile(trt, builder, network, inputs):
+    """An optimization profile pinned to the user's inputs, or None when no input needs one."""
+    if network.num_inputs != len(inputs):
+        raise TensorRTBuildError(
+            f"the network has {network.num_inputs} inputs but the model takes {len(inputs)}; cannot build a profile"
+        )
+    profile = builder.create_optimization_profile()
+    needed = False
+    for i in range(network.num_inputs):
+        tensor, value = network.get_input(i), inputs[i]
+        if tensor.is_shape_tensor:
+            values = [int(v) for v in value.detach().cpu().flatten().tolist()]
+            profile.set_shape_input(tensor.name, values, values, values)
+            logger.info("shape input %s pinned to %s", tensor.name, values, extra={"stage": "tensorrt_build"})
+            needed = True
+        elif -1 in tuple(tensor.shape):
+            shape = tuple(value.shape)
+            profile.set_shape(tensor.name, shape, shape, shape)
+            logger.info("dynamic input %s pinned to %s", tensor.name, shape, extra={"stage": "tensorrt_build"})
+            needed = True
+    return profile if needed else None
 
 
 def build_engine(state: State) -> State:
@@ -72,7 +107,7 @@ def build_engine(state: State) -> State:
         precision = state["precision"]
         logger.info("building a TensorRT engine (%s) from %s", precision, artifacts / SIMPLIFIED_FILE, extra={"stage": stage})
         try:
-            engine = build(artifacts / SIMPLIFIED_FILE)
+            engine = build(artifacts / SIMPLIFIED_FILE, state["user_inputs"])
         except ImportError:
             stage = "tensorrt_import"
             raise

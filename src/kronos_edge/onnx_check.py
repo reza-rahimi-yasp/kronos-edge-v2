@@ -1,10 +1,11 @@
 """ONNX export check: export the eagerly-run model with the dynamo exporter.
 
 Runs inside the container after the eager check, on the model and inputs
-already in state. For ``fp16`` a copy of the model and its floating-point
-inputs is cast to half first, so the ONNX, and the TensorRT engine built
-from it, carry that precision; the eager model in state stays as the user
-wrote it. The exported model stays in state for the next node and is written
+already in state. A copy of the model and its floating-point inputs is cast
+to the configured precision first, whatever precision the user wrote the
+model in, so the ONNX, and the TensorRT engine built from it, carry that
+precision; the eager model in state stays as the user wrote it. No copy is
+made when everything already has that dtype. The exported model stays in state for the next node and is written
 to the artifact directory as ``model.onnx`` through ``ONNXProgram.save``,
 which moves the weights to a companion ``.data`` file when they exceed the
 protobuf limit. onnx and onnxscript are imported lazily by the exporter, so
@@ -30,13 +31,21 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _SUMMARY = "## Exception summary"
 
 
-def cast_copy(model):
-    """A half-precision copy of the model; the original keeps its parameters untouched."""
-    return copy.deepcopy(model).half()
+DTYPES = {"fp32": torch.float32, "fp16": torch.float16}
 
 
-def cast_inputs(inputs):
-    return tuple(t.half() if t.is_floating_point() else t for t in inputs)
+def cast_copy(model, dtype):
+    """A copy of the model with its floating-point tensors in ``dtype``; the original is untouched."""
+    return copy.deepcopy(model).to(dtype)
+
+
+def cast_inputs(inputs, dtype):
+    return tuple(t.to(dtype) if t.is_floating_point() else t for t in inputs)
+
+
+def _already(model, inputs, dtype) -> bool:
+    tensors = [*model.parameters(), *model.buffers(), *inputs]
+    return all(t.dtype == dtype for t in tensors if t.is_floating_point())
 
 
 def export(model, inputs):
@@ -59,9 +68,10 @@ def export_onnx(state: State) -> State:
     try:
         model, inputs = state["model"], state["user_inputs"]
         precision = state.get("precision", "fp32")
-        if precision == "fp16":
-            logger.info("casting a copy of the model and its float inputs to half", extra={"stage": stage})
-            model, inputs = cast_copy(model), cast_inputs(inputs)
+        dtype = DTYPES[precision]
+        if not _already(model, inputs, dtype):
+            logger.info("casting a copy of the model and its float inputs to %s", dtype, extra={"stage": stage})
+            model, inputs = cast_copy(model, dtype), cast_inputs(inputs, dtype)
 
         stage = "onnx_capture"
         logger.info("exporting to ONNX (%s) with dynamo=True", precision, extra={"stage": stage})

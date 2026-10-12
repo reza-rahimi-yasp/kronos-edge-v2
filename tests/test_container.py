@@ -252,7 +252,7 @@ def test_user_prints_do_not_corrupt_the_report(tmp_path, good_model, artifacts):
     code = (
         "import sys\n"
         "from kronos_edge import tensorrt_check\n"
-        "tensorrt_check.build = lambda onnx_path: b'fake engine'\n"
+        "tensorrt_check.build = lambda onnx_path, inputs: b'fake engine'\n"
         "from kronos_edge.eager_check import main\n"
         f"sys.exit(main([{str(model)!r}, {str(npz)!r}, '--report', {str(report_path)!r}, "
         f"'--artifacts', {str(artifacts)!r}, '--precision', 'fp32', '--device', 'cpu']))\n"

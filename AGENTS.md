@@ -17,9 +17,13 @@ decisions: do not add file listings, commands, or summaries here.
   a setting re-runs the checks in the same environment and overwrites the
   artifacts. `config.Config` is the environment schema plus the settings.
 - Precision is applied once, at the ONNX export, by casting a copy of the
-  model and its float inputs. TensorRT 11 has no precision builder flags, so
-  the network is strongly typed and the engine computes in the ONNX's types.
-  The eager model in state is never cast.
+  model and its float inputs to the configured dtype for both `fp32` and
+  `fp16`, whatever the user wrote the model in. TensorRT 11 has no precision
+  builder flags, so the network is strongly typed and the engine computes in
+  the ONNX's types. The eager model in state is never cast.
+- The engine is built for the user's inputs: shape inputs and dynamic
+  dimensions get an optimization profile pinned to the values and shapes in
+  `input.npz`. Nothing is generalized beyond what the user supplied.
 - TensorRT exists only in the image. The real work is one module-level
   function, `tensorrt_check.build`, that an autouse fixture stubs; tests cover
   the node around it and the import failure, and the real parse and build

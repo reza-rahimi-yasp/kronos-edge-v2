@@ -55,11 +55,12 @@ tensorrt: "11.4.0"
 torch: "2.14.1"
 ```
 
-`precision` is a setting, not part of the environment. With `fp16`, a copy
-of the model and its floating-point inputs is cast to half precision before
-the ONNX export, so `model.onnx`, `model_simplified.onnx`, and `model.engine`
-are all FP16; integer inputs are left alone. The eager run always uses the
-model as you wrote it. TensorRT builds a strongly typed engine, so the engine
+`precision` is a setting, not part of the environment. Before the ONNX
+export, a copy of the model and its floating-point inputs is cast to the
+precision you chose, whatever precision you wrote the model in, so
+`model.onnx`, `model_simplified.onnx`, and `model.engine` all carry it;
+integer inputs are left alone. The eager run always uses the model as you
+wrote it. TensorRT builds a strongly typed engine, so the engine
 computes in exactly the types the ONNX carries. Changing `precision` and
 running again rewrites all three files in the same artifact directory.
 
@@ -132,8 +133,10 @@ Eager run, ONNX export, ONNX simplification, and TensorRT engine build (fp16) su
 The ONNX export runs `torch.onnx.export(..., dynamo=True)` on the same model
 and inputs the forward pass used, `onnxsim` simplifies the result, and
 TensorRT builds a serialized engine from the simplified model at the
-configured precision. Engine builds take seconds for small models and can
-take minutes for large ones; there is no timeout.
+configured precision. If the model uses an input's values as a shape, for
+example `x.reshape(shape.tolist())`, the engine is built for exactly the
+values in your `input.npz`. Engine builds take seconds for small models and
+can take minutes for large ones; there is no timeout.
 
 ## Artifact directory
 

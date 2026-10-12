@@ -96,7 +96,7 @@ def tensorrt_stub(monkeypatch):
     Returns the real worker for the one test that exercises its import failure.
     """
     real_build = tensorrt_check.build
-    monkeypatch.setattr(tensorrt_check, "build", lambda onnx_path: FAKE_ENGINE)
+    monkeypatch.setattr(tensorrt_check, "build", lambda onnx_path, inputs: FAKE_ENGINE)
     return real_build
 
 

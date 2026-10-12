@@ -26,8 +26,9 @@ def test_engine_is_built_from_the_simplified_model_and_named_in_the_message(tmp_
     """The precision is applied at the ONNX export; the builder reads it from the file (see test_onnx_check)."""
     seen = {}
 
-    def recording_build(onnx_path):
+    def recording_build(onnx_path, inputs):
         seen["onnx_path"] = onnx_path
+        seen["inputs"] = inputs
         return FAKE_ENGINE
 
     monkeypatch.setattr(tensorrt_check, "build", recording_build)
@@ -37,6 +38,7 @@ def test_engine_is_built_from_the_simplified_model_and_named_in_the_message(tmp_
     assert state["outcome"] == "success"
     assert f"TensorRT engine build ({precision}) succeeded" in state["customer_message"]
     assert seen["onnx_path"].name == "model_simplified.onnx" and seen["onnx_path"].is_file()
+    assert [tuple(t.shape) for t in seen["inputs"]] == [X.shape]  # the user's inputs, for shape-input profiles
     assert (tmp_path / ".artifact" / "model.engine").read_bytes() == FAKE_ENGINE
 
 
@@ -52,7 +54,7 @@ def test_changing_precision_overwrites_the_engine(tmp_path, monkeypatch, env_fil
     """The builder sees the ONNX of the new precision; the fake echoes the input dtype it was given."""
     monkeypatch.setattr(
         tensorrt_check, "build",
-        lambda onnx_path: onnx.TensorProto.DataType.Name(onnx.load(onnx_path).graph.input[0].type.tensor_type.elem_type).encode(),
+        lambda onnx_path, inputs: onnx.TensorProto.DataType.Name(onnx.load(onnx_path).graph.input[0].type.tensor_type.elem_type).encode(),
     )
     engine = tmp_path / ".artifact" / "model.engine"
 
@@ -66,15 +68,15 @@ def test_changing_precision_overwrites_the_engine(tmp_path, monkeypatch, env_fil
     "build, stage, fragment",
     [
         pytest.param(
-            lambda p: (_ for _ in ()).throw(tensorrt_check.TensorRTParseError("No importer registered for op: Foo")),
+            lambda p, i: (_ for _ in ()).throw(tensorrt_check.TensorRTParseError("No importer registered for op: Foo")),
             "tensorrt_parse", "op: Foo", id="parser_rejects_an_operator",
         ),
         pytest.param(
-            lambda p: (_ for _ in ()).throw(tensorrt_check.TensorRTBuildError("out of memory while tactic timing")),
+            lambda p, i: (_ for _ in ()).throw(tensorrt_check.TensorRTBuildError("out of memory while tactic timing")),
             "tensorrt_build", "out of memory", id="builder_returns_no_engine",
         ),
         pytest.param(
-            lambda p: (_ for _ in ()).throw(RuntimeError("CUDA driver mismatch")),
+            lambda p, i: (_ for _ in ()).throw(RuntimeError("CUDA driver mismatch")),
             "tensorrt_build", "driver mismatch", id="unexpected_exception",
         ),
     ],
@@ -113,8 +115,8 @@ def test_missing_tensorrt_is_a_support_failure(monkeypatch, caplog, good_model, 
 def test_unwritable_artifact_directory_is_the_save_stage(monkeypatch, good_model, artifacts):
     real_build = tensorrt_check.build
 
-    def build_then_lock(onnx_path):
-        engine = real_build(onnx_path)
+    def build_then_lock(onnx_path, inputs):
+        engine = real_build(onnx_path, inputs)
         artifacts.chmod(0o500)
         return engine
 
