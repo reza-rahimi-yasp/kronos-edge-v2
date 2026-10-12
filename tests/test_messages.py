@@ -15,7 +15,7 @@ def test_host_imports_without_torch_or_numpy():
         "import sys\n"
         "sys.modules['torch'] = None\n"
         "sys.modules['numpy'] = None\n"
-        "import kronos_edge.workflow, kronos_edge.container, kronos_edge.env_check, kronos_edge.state\n"
+        "import kronos_edge.workflow, kronos_edge.container, kronos_edge.env_check, kronos_edge.state, kronos_edge.artifacts\n"
         "print('host ok')\n"
     )
 

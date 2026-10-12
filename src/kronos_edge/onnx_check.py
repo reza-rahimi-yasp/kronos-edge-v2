@@ -2,16 +2,19 @@
 
 Runs inside the container after the eager check, on the model and inputs
 already in state. The exported model stays in state for the next node and is
-written to the artifact directory as ``model.onnx``.
+written to the artifact directory as ``model.onnx`` through
+``ONNXProgram.save``, which moves the weights to a companion ``.data`` file
+when they exceed the protobuf limit. onnx and onnxscript are imported lazily
+by the exporter, so a missing package is the ``onnx_exporter`` stage.
 """
 
 import re
 from pathlib import Path
 
-import onnx
 import torch
 from torch.onnx._internal.exporter._errors import TorchExportError
 
+from kronos_edge.artifacts import EXPORTED_FILE
 from kronos_edge.log import PACKAGE_LOGGER, get_logger
 from kronos_edge.messages import ONNX as CUSTOMER_MESSAGES
 from kronos_edge.state import State, fail
@@ -21,7 +24,6 @@ logger = get_logger(f"{PACKAGE_LOGGER}.onnx_check")
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _SUMMARY = "## Exception summary"
-EXPORTED_FILE = "model.onnx"
 
 
 def export(model, inputs):
@@ -56,10 +58,9 @@ def export_onnx(state: State) -> State:
             raise OnnxExportFailed(exc) from exc
 
         stage = "onnx_save"
-        model = program.model_proto
         path = Path(state["artifacts_dir"]) / EXPORTED_FILE
-        onnx.save(model, path)
+        program.save(path)
         logger.info("wrote %s", path, extra={"stage": stage})
     except Exception as exc:
         return fail(logger, stage, exc)
-    return {"onnx_model": model}
+    return {"onnx_model": program.model_proto}

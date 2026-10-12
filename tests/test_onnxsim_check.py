@@ -35,6 +35,7 @@ def test_success_message_names_simplification(tmp_path, env_files):
         pytest.param(lambda model: (_ for _ in ()).throw(RuntimeError("onnxsim exploded")), "onnx_simplify", "exploded", id="simplify_raises"),
         pytest.param(lambda model: (model, False), "onnx_simplified_invalid", "check", id="simplify_check_fails"),
         pytest.param(lambda model: (onnx.ModelProto(), True), "onnx_simplified_invalid", "simplified", id="simplified_model_invalid"),
+        pytest.param(lambda model: (_ for _ in ()).throw(ModuleNotFoundError("No module named 'onnxsim'")), "onnx_simplifier", "support", id="onnxsim_missing"),
     ],
 )
 def test_failure_stages(tmp_path, caplog, monkeypatch, env_files, simplify, stage, fragment):
@@ -46,5 +47,20 @@ def test_failure_stages(tmp_path, caplog, monkeypatch, env_files, simplify, stag
     assert state["error"] == stage
     assert fragment in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == [stage]
-    assert (tmp_path / ".artifact" / "model.onnx").is_file()
-    assert not (tmp_path / ".artifact" / "model_simplified.onnx").exists()
+    assert sorted(f.name for f in (tmp_path / ".artifact").iterdir()) == ["model.onnx"]
+
+
+def test_large_simplified_model_is_saved_with_external_data(monkeypatch, good_model, artifacts):
+    """Above the protobuf limit the weights go to a companion file; the checker runs by path."""
+    monkeypatch.setattr(onnxsim_check, "EXTERNAL_DATA_THRESHOLD", 0)
+
+    state = eager_check.run(*good_model, artifacts, device="cpu")
+
+    assert state.get("error") is None
+    assert sorted(f.name for f in artifacts.iterdir()) == [
+        "model.onnx", "model_simplified.onnx", "model_simplified.onnx.data"
+    ]
+    reloaded = onnx.load(artifacts / "model_simplified.onnx")  # pulls the weights back in from the companion
+    assert [n.op_type for n in reloaded.graph.node] == [n.op_type for n in state["simplified_onnx"].graph.node]
+    assert reloaded.graph.initializer and all(t.raw_data for t in reloaded.graph.initializer)
+    onnx.checker.check_model(reloaded)

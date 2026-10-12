@@ -50,6 +50,7 @@ ONNX = {
 }
 
 ONNXSIM = {
+    "onnx_simplifier": "The ONNX simplifier is not available inside the environment container. Contact support.",
     "onnx_simplify": "The ONNX model could not be simplified by onnxsim. Either fix the model or contact support.",
     "onnx_simplified_invalid": "onnxsim produced a simplified model that does not pass its check or the ONNX checker. Contact support.",
     "onnx_simplified_save": "The simplified ONNX model could not be written to the artifact directory.",

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
+from kronos_edge import artifacts as artifact_files
 from kronos_edge.log import get_logger
 from kronos_edge.messages import CONTAINER as CUSTOMER_MESSAGES, EAGER, ONNX, ONNXSIM
 from kronos_edge.state import State, fail
@@ -70,6 +71,7 @@ def run_in_container(state: State) -> State:
         image = state["environment"].image
         artifacts = Path(state["artifacts_path"])
         artifacts.mkdir(parents=True, exist_ok=True)
+        artifact_files.clear(artifacts)
         logger.info("running checks in %s on %s, artifacts in %s", image, DEVICE, artifacts, extra={"stage": stage})
         with tempfile.TemporaryDirectory() as report_dir:
             code = run_container(

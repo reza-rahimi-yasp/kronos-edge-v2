@@ -23,9 +23,17 @@ decisions: do not add file listings, commands, or summaries here.
 - Files produced for the user (`.onnx`, later `.engine`) go only to the
   artifact directory: `.artifact` in the working directory unless
   `--artifacts` says otherwise, created by the host and mounted into the
-  container. Each node writes its own file as soon as it has it, so a later
-  failure keeps the earlier files. Intermediate models also stay in state in
-  memory for the next node.
+  container. Every such file is listed in `artifacts.py`; the host deletes
+  those names, and only those, before each run so a stale file never sits
+  next to a fresh one. Each node writes its own file as soon as it has it, so
+  a later failure keeps the earlier files. Intermediate models also stay in
+  state in memory for the next node.
+- Model-stack packages (`onnx`, `onnxsim`, and the exporter's lazy imports)
+  are imported inside the node that needs them, never at module top, so a
+  missing package in the image reaches the report as a stage instead of
+  crashing the container before it can write the report.
+- Models above the 2 GB protobuf limit are saved with external data and
+  checked by path. The onnxsim step is unverified above that size.
 
 ## Node conventions
 

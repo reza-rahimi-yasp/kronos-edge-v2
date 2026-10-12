@@ -126,12 +126,18 @@ and inputs the forward pass used, then `onnxsim` simplifies the result.
 The files the checks produce are written to `.artifact` in the current
 directory. Pass `--artifacts path/to/dir` to use another directory. It is
 created if missing and mounted into the container, so the files are owned by
-the container's user. On a failure, the files produced before it are kept.
+the container's user. Each run first deletes the files listed below from a
+previous run and nothing else, so your own files in that directory are safe.
+On a failure, the files produced before it are kept.
 
 | File | Written by |
 |---|---|
 | `model.onnx` | The ONNX export. |
 | `model_simplified.onnx` | The onnxsim simplification. |
+
+When a model's weights exceed the 2 GB protobuf limit they are stored next to
+the `.onnx` file in a companion `.data` file of the same name, for example
+`model.onnx.data`. Keep the two files together.
 
 and exits with code 0. On failure it prints a message naming the problem,
 followed by the underlying exception, and exits with code 1. For example:
@@ -170,6 +176,7 @@ and dtype of every input, `DEBUG` adds the full traceback of a failure.
 | Your model could not be traced by torch.export for ONNX export. Fix the construct named below. | `torch.export` could not capture the model, for example a branch on a tensor value. The detail names the construct and the line in `model.py`. |
 | Your model was traced but an operator has no ONNX translation. Replace the operator named below or contact support. | The detail names the operator the dynamo exporter cannot translate. |
 | The exported ONNX model could not be written to the artifact directory. | Check the directory is writable; the detail shows the OS error. |
+| The ONNX simplifier is not available inside the environment container. Contact support. | The image lacks `onnxsim`. |
 | The ONNX model could not be simplified by onnxsim. Either fix the model or contact support. | onnxsim raised. The detail shows the exception. |
 | onnxsim produced a simplified model that does not pass its check or the ONNX checker. Contact support. | Not something you can fix from the model. |
 | The simplified ONNX model could not be written to the artifact directory. | Check the directory is writable; the detail shows the OS error. |

@@ -47,7 +47,8 @@ Every node either advances the state or records a failure stage in
   entry equal to the config on all five fields, and checks the host GPU via
   `nvidia-smi` and the image via `docker image inspect`. Stages:
   `load_environments`, `match_environment`, `host_gpu`, `image_available`.
-- `run_in_container` (`container.py`): creates the artifact directory, runs
+- `run_in_container` (`container.py`): creates the artifact directory,
+  deletes the managed files listed in `artifacts.py` from a previous run, runs
   the container graph with `docker run --gpus all`, `model.py` and
   `input.npz` mounted read-only and the report and artifact directories
   mounted writable, then validates `report.json` and requires the exit code
@@ -71,11 +72,12 @@ Run by `python -m kronos_edge.eager_check` with `--device cuda`.
   Stage: `forward`.
 - `export_onnx` (`onnx_check.py`): `torch.onnx.export(..., dynamo=True)` on
   the same model and inputs; keeps the `ModelProto` in state and writes
-  `model.onnx` to the artifact directory. Stages: `onnx_exporter`,
-  `onnx_capture`, `onnx_convert`, `onnx_save`.
+  `model.onnx` with `ONNXProgram.save`, external data above 2 GB. Stages:
+  `onnx_exporter`, `onnx_capture`, `onnx_convert`, `onnx_save`.
 - `simplify_onnx` (`onnxsim_check.py`): `onnxsim.simplify` on the model in
-  state, checked with `onnx.checker`; keeps the result in state and writes
-  `model_simplified.onnx`. Stages: `onnx_simplify`, `onnx_simplified_invalid`,
+  state; keeps the result in state, writes `model_simplified.onnx` with
+  external data above 2 GB, and checks the file with `onnx.checker`. Stages:
+  `onnx_simplifier`, `onnx_simplify`, `onnx_simplified_invalid`,
   `onnx_simplified_save`.
 - `report` (`eager_check.main`): writes `error` and `error_detail` to
   `report.json` and exits 1 on error, 0 otherwise.

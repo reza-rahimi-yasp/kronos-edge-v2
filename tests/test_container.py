@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from conftest import GOOD_MODEL
-from kronos_edge import container, eager_check
+from kronos_edge import artifacts, container, eager_check, onnxsim_check
 from kronos_edge.workflow import run_check
 
 TYPO_MODEL = GOOD_MODEL.replace("return self.conv(x)", "return self.convv(x)")
@@ -57,6 +57,69 @@ def test_build_command_mounts_files_and_requests_gpu(tmp_path):
         "--report", "/work/out/report.json", "--artifacts", "/work/artifact",
         "--device", "cuda", "--log-level", "DEBUG",
     ]
+
+
+def test_rerun_clears_managed_files_but_keeps_the_users_own(monkeypatch, tmp_path, env_files, good_model):
+    """A second run in the same directory must not leave the first run's outputs next to the new ones."""
+    config, environments = env_files
+    model, npz = good_model
+    art = tmp_path / ".artifact"
+    first = run_check(config, model, npz, environments_path=environments, artifacts_path=art)
+    assert first["outcome"] == "success"
+    assert sorted(f.name for f in art.iterdir()) == ["model.onnx", "model_simplified.onnx"]
+    (art / "notes.txt").write_text("mine")
+    (art / "model.onnx.data").write_bytes(b"stale companion")
+
+    def simplify_fails(model):
+        raise RuntimeError("second run cannot simplify")
+
+    monkeypatch.setattr(onnxsim_check, "simplify", simplify_fails)
+
+    second = run_check(config, model, npz, environments_path=environments, artifacts_path=art)
+
+    assert second["error"] == "onnx_simplify"
+    assert sorted(f.name for f in art.iterdir()) == ["model.onnx", "notes.txt"]
+
+
+def test_managed_files_are_cleared_even_if_the_container_fails_to_start(monkeypatch, tmp_path, env_files, good_model):
+    config, environments = env_files
+    art = tmp_path / ".artifact"
+    art.mkdir()
+    for name in artifacts.MANAGED_FILES:
+        (art / name).write_bytes(b"stale")
+    fake_container(monkeypatch, None, 1)
+
+    state = run_check(config, *good_model, environments_path=environments, artifacts_path=art)
+
+    assert state["error"] == "container_run"
+    assert list(art.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "blocked, stage",
+    [
+        pytest.param("onnxscript", "onnx_exporter", id="exporter_missing"),
+        pytest.param("onnxsim", "onnx_simplifier", id="simplifier_missing"),
+    ],
+)
+def test_missing_dependency_reaches_the_report(tmp_path, good_model, artifacts, blocked, stage):
+    """Dependency imports happen inside the nodes, so a missing package is a stage, not a startup crash."""
+    model, npz = good_model
+    report_path = tmp_path / "report.json"
+    code = (
+        f"import sys; sys.modules[{blocked!r}] = None\n"
+        "from kronos_edge.eager_check import main\n"
+        f"sys.exit(main([{str(model)!r}, {str(npz)!r}, '--report', {str(report_path)!r}, "
+        f"'--artifacts', {str(artifacts)!r}, '--device', 'cpu']))\n"
+    )
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
+
+    result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+
+    assert result.returncode == 1, result.stderr
+    report = json.loads(report_path.read_text())
+    assert report["error"] == stage
+    assert blocked in report["error_detail"]
 
 
 def test_artifact_directory_is_created_before_the_container_runs(monkeypatch, tmp_path, env_files, good_model):

@@ -1,0 +1,22 @@
+from kronos_edge import artifacts, onnx_check, onnxsim_check
+
+
+def test_managed_names_agree_with_the_nodes_that_write_them():
+    assert onnx_check.EXPORTED_FILE in artifacts.MANAGED_FILES
+    assert onnxsim_check.SIMPLIFIED_FILE in artifacts.MANAGED_FILES
+
+
+def test_clear_removes_managed_files_and_companions_only(tmp_path):
+    for name in artifacts.MANAGED_FILES:
+        (tmp_path / name).write_bytes(b"x")
+        (tmp_path / f"{name}.data").write_bytes(b"x")
+    (tmp_path / "keep.onnx").write_bytes(b"x")
+    (tmp_path / "sub").mkdir()
+
+    artifacts.clear(tmp_path)
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["keep.onnx", "sub"]
+
+
+def test_clear_tolerates_a_missing_directory(tmp_path):
+    artifacts.clear(tmp_path / "absent")
