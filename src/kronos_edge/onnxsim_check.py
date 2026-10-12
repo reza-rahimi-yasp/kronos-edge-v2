@@ -51,6 +51,9 @@ def simplify_onnx(state: State) -> State:
             simplified, path, save_as_external_data=external,
             location=f"{SIMPLIFIED_FILE}{EXTERNAL_DATA_SUFFIX}", size_threshold=0,  # all weights, like ONNXProgram.save
         )
+        if external:
+            # onnx.save replaced the in-memory weights with file references; pull them back for the next node.
+            onnx.external_data_helper.load_external_data_for_model(simplified, str(path.parent))
         logger.info("wrote %s%s", path, " with external data" if external else "", extra={"stage": stage})
 
         stage = "onnx_simplified_invalid"

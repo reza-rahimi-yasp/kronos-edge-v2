@@ -175,7 +175,7 @@ and dtype of every input, `DEBUG` adds the full traceback of a failure.
 | The ONNX exporter is not available inside the environment container. Contact support. | The image lacks `onnx` or `onnxscript`. |
 | Your model could not be traced by torch.export for ONNX export. Fix the construct named below. | `torch.export` could not capture the model, for example a branch on a tensor value. The detail names the construct and the line in `model.py`. |
 | Your model was traced but an operator has no ONNX translation. Replace the operator named below or contact support. | The detail names the operator the dynamo exporter cannot translate. |
-| The exported ONNX model could not be written to the artifact directory. | Check the directory is writable; the detail shows the OS error. |
+| The exported ONNX model could not be serialized or written to the artifact directory. | Check the directory is writable and the machine has memory for the model; the detail shows the error. |
 | The ONNX simplifier is not available inside the environment container. Contact support. | The image lacks `onnxsim`. |
 | The ONNX model could not be simplified by onnxsim. Either fix the model or contact support. | onnxsim raised. The detail shows the exception. |
 | onnxsim produced a simplified model that does not pass its check or the ONNX checker. Contact support. | Not something you can fix from the model. |

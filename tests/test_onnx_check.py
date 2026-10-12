@@ -157,6 +157,26 @@ def test_unwritable_artifact_directory_is_its_own_stage(tmp_path, env_files):
     assert "blocked" in state["customer_message"]
 
 
+def test_failing_model_proto_is_a_stage_not_an_escape(monkeypatch, caplog, good_model, artifacts):
+    """model_proto materializes the IR; if that raises after the file is saved, it must still be a stage."""
+
+    class SavesButCannotMaterialize:
+        def save(self, path):
+            Path(path).write_bytes(b"saved")
+
+        @property
+        def model_proto(self):
+            raise MemoryError("cannot materialize the proto")
+
+    monkeypatch.setattr(onnx_check, "export", lambda model, inputs: SavesButCannotMaterialize())
+
+    state = eager_check.run(*good_model, artifacts, device="cpu")
+
+    assert state["error"] == "onnx_save"
+    assert "materialize" in state["error_detail"]
+    assert [r.stage for r in error_records(caplog)] == ["onnx_save"]
+
+
 def test_export_kept_in_state_for_the_next_node(good_model, artifacts):
     state = eager_check.run(*good_model, artifacts, device="cpu")
 

@@ -61,6 +61,7 @@ def export_onnx(state: State) -> State:
         path = Path(state["artifacts_dir"]) / EXPORTED_FILE
         program.save(path)
         logger.info("wrote %s", path, extra={"stage": stage})
+        model = program.model_proto  # materializes the IR; guarded so a failure is still a stage
     except Exception as exc:
         return fail(logger, stage, exc)
-    return {"onnx_model": program.model_proto}
+    return {"onnx_model": model}

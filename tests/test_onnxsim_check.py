@@ -60,7 +60,8 @@ def test_large_simplified_model_is_saved_with_external_data(monkeypatch, good_mo
     assert sorted(f.name for f in artifacts.iterdir()) == [
         "model.onnx", "model_simplified.onnx", "model_simplified.onnx.data"
     ]
+    in_state = state["simplified_onnx"]
+    assert in_state.graph.initializer and all(t.raw_data for t in in_state.graph.initializer)
+    onnx.checker.check_model(in_state)  # the in-memory handoff still carries its weights
     reloaded = onnx.load(artifacts / "model_simplified.onnx")  # pulls the weights back in from the companion
-    assert [n.op_type for n in reloaded.graph.node] == [n.op_type for n in state["simplified_onnx"].graph.node]
-    assert reloaded.graph.initializer and all(t.raw_data for t in reloaded.graph.initializer)
-    onnx.checker.check_model(reloaded)
+    assert reloaded.SerializeToString() == in_state.SerializeToString()
