@@ -9,8 +9,29 @@ decisions: do not add file listings, commands, or summaries here.
 - Two LangGraph graphs: the host graph validates config and environment, the
   container graph runs the model. The host never runs user code.
 - The host must import without torch or numpy. Only the container graph's
-  modules (`eager_check`, `onnx_check`, `onnxsim_check`, `tensorrt_check`,
-  `benchmark_check`) import the model stack. A test enforces it.
+  modules (`eager_check`, `pt2_check`, `onnx_check`, `onnxsim_check`,
+  `tensorrt_check`, `benchmark_check`) import the model stack. A test
+  enforces it.
+- Kernelgen runs on the host, after the container, as `yasp-toolkit`
+  subprocesses (`kernelgen compile`, then `eval compare`): the toolkit needs
+  the user's Yasp API key, which never enters the container, and the host
+  never imports yasp-agent. The `kernelgen` node requires the container's
+  `model.pt2` and `model.engine` before it starts. The toolkit exits 0 after
+  some early HTTP errors, so a node trusts the file it asked for, not the
+  exit code.
+- The kernelgen reference is produced in the container by `torch.export`
+  directly (inference mode, Core ATen decompositions, `torch.export.save`),
+  mirroring `yasp-toolkit kernelgen export`: the image has no yasp-agent and
+  the host must not run user code. It is exported right after the eager pass
+  and from the uncast model.
+- The kernelgen evaluation runs on this machine: `eval compare` is routed to
+  the evaluator registered from it by the `eval_routing` setting, and the same
+  key is passed to `kernelgen compile --eval-routing`. The setting is
+  required, so a config without it fails validation before any job is
+  submitted; an unrouted job could land on any evaluator with the same GPU
+  name. The kernel must pass
+  the evaluator's correctness checks; its speedup is reported, not judged, and
+  no expectation is derived from TensorRT versus the eager run.
 - `config.yaml` has two kinds of fields. The five environment fields must
   equal a registry entry and select the image. Settings (`precision`,
   `metric`, `threshold`) are validated by the same schema but never take part
@@ -72,6 +93,9 @@ decisions: do not add file listings, commands, or summaries here.
   crashing the container before it can write the report.
 - Models above the 2 GB protobuf limit are saved with external data and
   checked by path. The onnxsim step is unverified above that size.
+- `yasp-agent[gaia]` comes from the yasp package index, not PyPI; the
+  `README.md` install command names the index. Credentials are documented in
+  `.env.example` only; nothing reads a `.env` file.
 
 ## Node conventions
 
@@ -82,8 +106,8 @@ decisions: do not add file listings, commands, or summaries here.
 - Log through `kronos_edge.log.get_logger` and tag records with
   `extra={"stage": ...}`. A module that can run under `python -m` names its
   logger explicitly, because `__name__` becomes `__main__` there.
-- Anything that shells out (`docker`, `nvidia-smi`) is a module-level function
-  so tests can replace it with `monkeypatch`.
+- Anything that shells out (`docker`, `nvidia-smi`, `yasp-toolkit`) is a
+  module-level function so tests can replace it with `monkeypatch`.
 
 ## Testing
 
@@ -91,8 +115,8 @@ decisions: do not add file listings, commands, or summaries here.
   then implement.
 - One test file per check. Fixtures are source strings written to
   `tmp_path`; nothing binary is committed. Tests never shell out: autouse
-  fixtures replace the `docker` and `nvidia-smi` probes and run the container
-  graph in-process on CPU.
+  fixtures replace the `docker` and `nvidia-smi` probes and `yasp-toolkit`,
+  and run the container graph in-process on CPU. No test needs a Yasp key.
 - A gitignored `.venv` is expected at the repo root. No lockfiles.
 
 ## Working rules

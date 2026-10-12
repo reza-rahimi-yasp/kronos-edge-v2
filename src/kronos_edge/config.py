@@ -36,6 +36,10 @@ class Config(EnvironmentConfig):
     precision: Literal["fp32", "fp16"]
     metric: Literal["cosine"]
     threshold: Annotated[float, Field(strict=True, ge=0.0, le=1.0)]
+    # Routing key of the evaluator registered from this machine (`yasp-eval register --tag routing=...`),
+    # which pins kernelgen's evaluations to it. Required: without it any evaluator advertising the
+    # config's GPU could take the job, and the evaluation must run on this machine.
+    eval_routing: Annotated[StrictStr, Field(min_length=1)]
 
 
 class Environment(EnvironmentConfig):

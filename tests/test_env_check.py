@@ -68,6 +68,7 @@ def without(key):
     [
         pytest.param(without("tensorrt"), "tensorrt", id="missing_field"),
         pytest.param(without("precision"), "precision", id="missing_precision"),
+        pytest.param(without("eval_routing"), "eval_routing", id="missing_eval_routing"),
         pytest.param({**CONFIG, "precision": "int8"}, "fp16", id="unsupported_precision"),
         pytest.param({**CONFIG, "precision": "FP16"}, "fp16", id="precision_case_sensitive"),
         pytest.param(without("metric"), "metric", id="missing_metric"),

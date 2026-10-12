@@ -75,7 +75,10 @@ def test_rerun_clears_managed_files_but_keeps_the_users_own(monkeypatch, tmp_pat
     art = tmp_path / ".artifact"
     first = run_check(config, model, npz, environments_path=environments, artifacts_path=art)
     assert first["outcome"] == "success"
-    assert sorted(f.name for f in art.iterdir()) == ["benchmark.json", "model.engine", "model.onnx", "model_simplified.onnx"]
+    assert sorted(f.name for f in art.iterdir()) == [
+        "benchmark.json", "kernel.py", "kernelgen_eval.json", "kernelgen_report.json",
+        "model.engine", "model.onnx", "model.pt2", "model_simplified.onnx",
+    ]
     (art / "notes.txt").write_text("mine")
     (art / "model.onnx.data").write_bytes(b"stale companion")
 
@@ -87,7 +90,7 @@ def test_rerun_clears_managed_files_but_keeps_the_users_own(monkeypatch, tmp_pat
     second = run_check(config, model, npz, environments_path=environments, artifacts_path=art)
 
     assert second["error"] == "onnx_simplify"
-    assert sorted(f.name for f in art.iterdir()) == ["model.onnx", "notes.txt"]
+    assert sorted(f.name for f in art.iterdir()) == ["model.onnx", "model.pt2", "notes.txt"]
 
 
 def test_managed_files_are_cleared_even_if_the_container_fails_to_start(monkeypatch, tmp_path, env_files, good_model):
@@ -137,6 +140,8 @@ def test_artifact_directory_is_created_before_the_container_runs(monkeypatch, tm
 
     def fake(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level):
         seen["exists"] = Path(artifacts_dir).is_dir()
+        for name in ("model.pt2", "model.engine"):  # what the kernelgen step waits for
+            (Path(artifacts_dir) / name).write_bytes(b"x")
         (Path(report_dir) / container.REPORT_FILE).write_text(json.dumps({"error": None, "benchmark": BENCHMARK}))
         return 0
 
@@ -283,7 +288,7 @@ def test_user_prints_do_not_corrupt_the_report(tmp_path, good_model, artifacts):
     assert (report["error"], report["error_detail"]) == (None, "")
     assert container.Report.model_validate(report).benchmark is not None
     assert "[torch.onnx]" not in result.stdout
-    assert sorted(f.name for f in artifacts.iterdir()) == ["benchmark.json", "model.engine", "model.onnx", "model_simplified.onnx"]
+    assert sorted(f.name for f in artifacts.iterdir()) == ["benchmark.json", "model.engine", "model.onnx", "model.pt2", "model_simplified.onnx"]
 
 
 def test_cuda_unavailable_is_its_own_stage(monkeypatch, good_model, artifacts):
