@@ -11,7 +11,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 from kronos_edge.log import get_logger
-from kronos_edge.messages import CONTAINER as CUSTOMER_MESSAGES, EAGER
+from kronos_edge.messages import CONTAINER as CUSTOMER_MESSAGES, EAGER, ONNX
 from kronos_edge.state import State, fail
 
 logger = get_logger(__name__)
@@ -50,7 +50,7 @@ def _read_report(report_dir, code: int) -> Report:
     if not path.exists():
         raise RuntimeError(f"container exited {code} without writing a report")
     report = Report.model_validate_json(path.read_text())
-    if report.error is not None and report.error not in EAGER:
+    if report.error is not None and report.error not in EAGER | ONNX:
         raise ValueError(f"report names unknown failure stage {report.error!r}")
     expected = 0 if report.error is None else 1
     if code != expected:

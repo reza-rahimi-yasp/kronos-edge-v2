@@ -1,4 +1,4 @@
-"""Eager-mode check: load a user's model.py, validate input.npz, run forward.
+"""Eager-mode check: load a user's model.py, validate input.npz, run forward, export to ONNX.
 
 model.py must define ``Model`` (a torch.nn.Module subclass) and
 ``get_inputs()`` or ``get_fwd_args()`` returning the reference inputs.
@@ -16,6 +16,7 @@ import numpy as np
 import torch
 from langgraph.graph import END, START, StateGraph
 
+from kronos_edge import onnx_check
 from kronos_edge.log import PACKAGE_LOGGER, configure, get_logger
 from kronos_edge.messages import EAGER as CUSTOMER_MESSAGES
 from kronos_edge.state import State, fail, route_on_error
@@ -133,10 +134,12 @@ def build_graph():
     graph.add_node("load_model", load_model)
     graph.add_node("validate_inputs", validate_inputs)
     graph.add_node("run_eager", run_eager)
+    graph.add_node("export_onnx", onnx_check.export_onnx)
     graph.add_edge(START, "load_model")
     graph.add_conditional_edges("load_model", route_on_error, {"ok": "validate_inputs", "failure": END})
     graph.add_conditional_edges("validate_inputs", route_on_error, {"ok": "run_eager", "failure": END})
-    graph.add_edge("run_eager", END)
+    graph.add_conditional_edges("run_eager", route_on_error, {"ok": "export_onnx", "failure": END})
+    graph.add_edge("export_onnx", END)
     return graph.compile()
 
 

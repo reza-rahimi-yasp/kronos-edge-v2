@@ -42,4 +42,10 @@ EAGER = {
     "forward": "Your model cannot be run through eager mode. Either fix it or contact support.",
 }
 
-CUSTOMER_MESSAGES = merge(ENV, CONTAINER, EAGER)
+ONNX = {
+    "onnx_exporter": "The ONNX exporter is not available inside the environment container. Contact support.",
+    "onnx_capture": "Your model could not be traced by torch.export for ONNX export. Fix the construct named below.",
+    "onnx_convert": "Your model was traced but an operator has no ONNX translation. Replace the operator named below or contact support.",
+}
+
+CUSTOMER_MESSAGES = merge(ENV, CONTAINER, EAGER, ONNX)

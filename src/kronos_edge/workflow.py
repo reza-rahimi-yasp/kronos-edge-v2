@@ -18,8 +18,8 @@ DEFAULT_ENVIRONMENTS = Path(__file__).with_name("environments.yaml")
 
 
 def success(state: State) -> State:
-    logger.info("eager mode run succeeded")
-    return {"outcome": "success", "customer_message": "Eager mode run succeeded."}
+    logger.info("eager mode run and ONNX export succeeded")
+    return {"outcome": "success", "customer_message": "Eager mode run and ONNX export succeeded."}
 
 
 def failure(state: State) -> State:
