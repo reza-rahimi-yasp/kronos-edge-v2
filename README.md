@@ -6,34 +6,66 @@ software versions you want, a `model.py`, and an `input.npz`. It matches the
 config to a supported environment, then runs the check inside that
 environment's Docker container on the GPU: it loads the model, validates the
 inputs against the model's own reference inputs, runs one forward pass,
-exports the model to ONNX with the dynamo exporter, simplifies the ONNX with
-onnxsim, builds a TensorRT engine at the precision you ask for, benchmarks
-the engine against eager mode, checks their outputs agree, and prints either
-the benchmark result or a message saying what to fix. The ONNX files, the
-engine, and the benchmark numbers land in an artifact directory.
+exports the model with `torch.export` as the reference for kernelgen, exports
+it to ONNX with the dynamo exporter, simplifies the ONNX with onnxsim, builds
+a TensorRT engine at the precision you ask for, benchmarks the engine against
+eager mode, and checks their outputs agree. Back on this machine it then asks
+yasp kernelgen for an optimized kernel of the model and scores that kernel on
+this machine's evaluator, and prints either the benchmark result and the
+kernelgen speedup or a message saying what to fix. The reference, the ONNX
+files, the engine, the benchmark numbers, the kernel, and the evaluation
+reports land in an artifact directory.
 
 ## Requirements
 
 - Python 3.12 or newer
-- The packages in `requirements.txt` (`langgraph`, `numpy`, `onnx`, `onnxscript`, `onnxsim`, `pydantic`, `pyyaml`, `torch`)
+- The packages in `requirements.txt` (`langgraph`, `numpy`, `onnx`, `onnxscript`, `onnxsim`, `pydantic`, `pyyaml`, `torch`, `yasp-agent[gaia]`)
 - Docker with the NVIDIA container runtime, and `nvidia-smi` on the path
+- A Yasp API key for the kernelgen steps, and an evaluator registered from this
+  machine (see below)
 
 ## Install
 
 ```bash
 python -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -r requirements.txt \
+    --extra-index-url http://nexus.yasp.localdomain/repository/pypi-proxy/simple/ \
+    --trusted-host nexus.yasp.localdomain
 ```
+
+`yasp-agent` is published on the yasp package index, not on PyPI, so the
+extra index is needed. It installs the `yasp-toolkit` command the kernelgen
+steps run.
 
 The package lives under `src/`, so set `PYTHONPATH=src` when running it from
 a checkout. The examples below do that.
 
+## Set up your Yasp API key
+
+`yasp-toolkit` needs a Yasp API key. Either export it in the shell that runs
+the check, or store it in the OS keyring once:
+
+```bash
+export YASP_API_KEY=...            # the variable yasp-toolkit reads
+.venv/bin/yasp-toolkit keyring set  # or: keep it in the keyring instead
+```
+
+`.env.example` documents the variable. Nothing in the check reads a `.env`
+file: if you keep the key in one, load it yourself (`set -a; . ./.env; set +a`)
+and never commit it. `.env` is gitignored.
+
+The kernelgen evaluation runs on this machine, on the evaluator you
+registered from it (`yasp-eval register --tag routing=<key>`); the evaluator
+advertises the GPU name `nvidia-smi` reports, which is the `gpu` of your
+config. Put that routing key in the config (`eval_routing`, below) so the
+evaluation is pinned to it.
+
 ## Prepare your config file
 
-`config.yaml` names the environment you want and the settings for the
-checks. All eight fields are required and no other fields are allowed.
-Version numbers must be quoted so YAML does not read them as numbers;
-`threshold` is a number.
+`config.yaml` names the environment you want, the settings for the checks,
+and optionally the evaluator for the kernelgen kernel. The first eight fields
+are required and no other fields are allowed. Version numbers must be quoted
+so YAML does not read them as numbers; `threshold` is a number.
 
 | Field | Type | Example |
 |---|---|---|
@@ -45,6 +77,7 @@ Version numbers must be quoted so YAML does not read them as numbers;
 | `precision` | `fp32` or `fp16` | `fp16` |
 | `metric` | `cosine` | `cosine` |
 | `threshold` | number from 0 to 1 | `0.99` |
+| `eval_routing` | non-empty string, optional | `reza-fractal` |
 
 The first five fields must match one supported environment exactly. The
 supported environments are listed in `src/kronos_edge/environments.yaml`.
@@ -62,10 +95,16 @@ torch: "2.14.1"
 export, a copy of the model and its floating-point inputs is cast to the
 precision you chose, whatever precision you wrote the model in, so
 `model.onnx`, `model_simplified.onnx`, and `model.engine` all carry it;
-integer inputs are left alone. The eager run always uses the model as you
-wrote it. TensorRT builds a strongly typed engine, so the engine
-computes in exactly the types the ONNX carries. Changing `precision` and
-running again rewrites all three files in the same artifact directory.
+integer inputs are left alone. The eager run and the kernelgen reference
+(`model.pt2`) always use the model as you wrote it. TensorRT builds a
+strongly typed engine, so the engine computes in exactly the types the ONNX
+carries. Changing `precision` and running again rewrites all the files in the
+same artifact directory.
+
+`eval_routing` is also a setting. It is the routing key of the evaluator
+registered from this machine; kernelgen's in-compile evaluations and the
+final evaluation are pinned to it. Leave it out and they go to any evaluator
+advertising your config's `gpu`.
 
 `metric` names how the engine's outputs are compared with the eager outputs.
 Only cosine similarity is implemented, so only `cosine` is accepted.
@@ -140,6 +179,7 @@ Eager run, ONNX export, ONNX simplification, TensorRT engine build (fp16), and b
 Latency per run, eager: mean 0.047 ms, median 0.046 ms, p95 0.052 ms.
 Latency per run, TensorRT: mean 0.015 ms, median 0.015 ms, p95 0.017 ms.
 TensorRT is 3.0x faster than eager (median). Cosine similarity: 0.9998 (threshold 0.99).
+The kernelgen optimization and kernelgen evaluation (speedup 2.00x) succeeded.
 ```
 
 The benchmark warms each side up with 20 runs, then times 200 runs one by
@@ -151,13 +191,24 @@ with the engine's output at the same position by the configured metric, and
 every value is printed. A model that changes its inputs in place is fine:
 every stage runs it on copies of your inputs.
 
-The ONNX export runs `torch.onnx.export(..., dynamo=True)` on the same model
-and inputs the forward pass used, `onnxsim` simplifies the result, and
-TensorRT builds a serialized engine from the simplified model at the
-configured precision. If the model uses an input's values as a shape, for
-example `x.reshape(shape.tolist())`, the engine is built for exactly the
-values in your `input.npz`. Engine builds take seconds for small models and
-can take minutes for large ones; there is no timeout.
+Right after the forward pass, `torch.export` traces the same model and inputs
+into `model.pt2`, the reference kernelgen optimizes. The ONNX export then runs
+`torch.onnx.export(..., dynamo=True)` on the same model and inputs, `onnxsim`
+simplifies the result, and TensorRT builds a serialized engine from the
+simplified model at the configured precision. If the model uses an input's
+values as a shape, for example `x.reshape(shape.tolist())`, the engine is
+built for exactly the values in your `input.npz`. Engine builds take seconds
+for small models and can take minutes for large ones; there is no timeout.
+
+Once the container has produced the reference and the engine, the check runs
+`yasp-toolkit kernelgen compile` on this machine with your `model.py` as the
+source and your config's `gpu` as the target, and waits for the kernelgen
+job; the optimized kernel is written as `kernel.py`. It then runs
+`yasp-toolkit eval compare` to score that kernel against the reference on
+this machine's evaluator. The kernel must pass the evaluator's correctness
+checks; the speedup the evaluator measured is printed, and no expectation is
+derived from the TensorRT engine or the eager run. Kernelgen jobs take
+minutes; the toolkit's progress goes to the log.
 
 ## Artifact directory
 
@@ -174,6 +225,10 @@ On a failure, the files produced before it are kept.
 | `model_simplified.onnx` | The onnxsim simplification. |
 | `model.engine` | The serialized TensorRT engine, at the configured precision. Specific to this GPU and TensorRT version. |
 | `benchmark.json` | The latency statistics of both sides, the speedup, and the metric values, as printed. |
+| `model.pt2` | The `torch.export` reference of your model, as kernelgen's `reference.pt2`. |
+| `kernel.py` | The optimized kernel kernelgen returned (its `module_source.py`). |
+| `kernelgen_report.json` | The kernelgen job's report. |
+| `kernelgen_eval.json` | The evaluator's results for `kernel.py`: correctness checks and speedup. |
 
 When a model's weights exceed the 2 GB protobuf limit they are stored next to
 the `.onnx` file in a companion `.data` file of the same name, for example
@@ -212,6 +267,8 @@ and dtype of every input, `DEBUG` adds the full traceback of a failure.
 | input.npz could not be read. | Check the path, and that the file was written with `numpy.savez`. |
 | input.npz does not match the inputs returned by get_inputs(). | The detail line names the key and the expected versus found shape and dtype. |
 | Your model cannot be run through eager mode. Either fix it or contact support. | The forward pass raised. The detail line shows the exception. |
+| Your model could not be traced by torch.export for the kernelgen reference. Fix the construct named below. | `torch.export` could not capture the model, for example a branch on a tensor value. The detail names the construct. |
+| The kernelgen reference (model.pt2) could not be written to the artifact directory. | Check the directory is writable; the detail shows the OS error. |
 | The ONNX exporter is not available inside the environment container. Contact support. | The image lacks `onnx` or `onnxscript`. |
 | Your model could not be cast to the requested precision for export. Either fix it or contact support. | Casting a copy of the model to half raised; the detail shows the exception. |
 | Your model could not be traced by torch.export for ONNX export. Fix the construct named below. | `torch.export` could not capture the model, for example a branch on a tensor value. The detail names the construct and the line in `model.py`. |
@@ -230,6 +287,14 @@ and dtype of every input, `DEBUG` adds the full traceback of a failure.
 | The TensorRT engine could not be loaded or run. The errors it reported are below. | The detail lists what TensorRT logged. |
 | The TensorRT engine's outputs do not have the same structure as the eager outputs. Contact support. | The count or a shape differs; the detail names the output. |
 | The TensorRT engine's outputs do not match the eager outputs within the threshold in config.yaml. | The detail names each output below the threshold with its value. Lower the threshold if the gap is acceptable for your model, or use `fp32`. |
+| The kernelgen reference (model.pt2) is missing from the artifact directory. Contact support. | The container reported success without writing the reference. |
+| The TensorRT engine (model.engine) kernelgen waits for is missing from the artifact directory. Contact support. | The container reported success without writing the engine. |
+| The yasp-toolkit command is not available. Install yasp-agent[gaia] into the environment that runs the check. | Install the packages in `requirements.txt` with the yasp index. |
+| No Yasp API key was found. Export YASP_API_KEY (see .env.example) or store a key with `yasp-toolkit keyring set`. | See "Set up your Yasp API key". |
+| The kernelgen optimization did not produce a kernel. The toolkit's output is below. | The kernelgen job failed or the service could not be reached; the detail shows the toolkit's output, including the task id. |
+| The kernelgen kernel could not be evaluated on this machine. The toolkit's output is below. | The evaluation task failed or no evaluator took it; check `eval_routing` and that your evaluator is registered. |
+| The evaluator's results for the kernelgen kernel could not be read. Contact support. | Not something you can fix from the model. |
+| The kernelgen kernel failed the evaluation on this machine: it did not build or did not match your model. The evaluator's report is below. Contact support. | The detail names the failed checks and what the evaluator captured. |
 
 ## Run the tests
 

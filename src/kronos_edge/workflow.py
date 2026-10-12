@@ -1,11 +1,11 @@
-"""Workflow: validate the environment on the host, run the eager check in its container."""
+"""Workflow: validate the environment on the host, run the checks in the container, then kernelgen on the host."""
 
 import argparse
 from pathlib import Path
 
 from langgraph.graph import END, START, StateGraph
 
-from kronos_edge import container, env_check
+from kronos_edge import container, env_check, kernelgen_check
 from kronos_edge.log import PACKAGE_LOGGER, configure, get_logger
 from kronos_edge.messages import CUSTOMER_MESSAGES
 from kronos_edge.state import State, route_on_error
@@ -26,9 +26,12 @@ def success(state: State) -> State:
     precision = state["config"].precision
     bench = state["benchmark"]
     speedup = bench["speedup"]
+    kernelgen_speedup = state["kernelgen_speedup"]
     comparison = f"{speedup:.1f}x faster" if speedup >= 1 else f"{1 / speedup:.1f}x slower"
     values = ", ".join(f"{v:.4f}" for v in bench["values"])
-    logger.info("all checks succeeded at %s; speedup %.2fx", precision, speedup)
+    logger.info(
+        "all checks succeeded at %s; speedup %.2fx; kernelgen speedup %.2fx", precision, speedup, kernelgen_speedup
+    )
     return {
         "outcome": "success",
         "customer_message": "\n".join([
@@ -37,6 +40,7 @@ def success(state: State) -> State:
             _latency("TensorRT", bench["tensorrt_ms"]),
             f"TensorRT is {comparison} than eager (median). "
             f"{bench['metric'].capitalize()} similarity: {values} (threshold {bench['threshold']}).",
+            f"The kernelgen optimization and kernelgen evaluation (speedup {kernelgen_speedup:.2f}x) succeeded.",
         ]),
     }
 
@@ -51,12 +55,16 @@ def build_graph():
     graph.add_node("load_config", env_check.load_config)
     graph.add_node("match_environment", env_check.match_environment)
     graph.add_node("run_in_container", container.run_in_container)
+    graph.add_node("kernelgen", kernelgen_check.kernelgen)
+    graph.add_node("evaluate_kernelgen", kernelgen_check.evaluate_kernelgen)
     graph.add_node("success", success)
     graph.add_node("failure", failure)
     graph.add_edge(START, "load_config")
     graph.add_conditional_edges("load_config", route_on_error, {"ok": "match_environment", "failure": "failure"})
     graph.add_conditional_edges("match_environment", route_on_error, {"ok": "run_in_container", "failure": "failure"})
-    graph.add_conditional_edges("run_in_container", route_on_error, {"ok": "success", "failure": "failure"})
+    graph.add_conditional_edges("run_in_container", route_on_error, {"ok": "kernelgen", "failure": "failure"})
+    graph.add_conditional_edges("kernelgen", route_on_error, {"ok": "evaluate_kernelgen", "failure": "failure"})
+    graph.add_conditional_edges("evaluate_kernelgen", route_on_error, {"ok": "success", "failure": "failure"})
     graph.add_edge("success", END)
     graph.add_edge("failure", END)
     return graph.compile()

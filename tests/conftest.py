@@ -1,4 +1,6 @@
+import json
 import logging
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -7,7 +9,7 @@ import yaml
 
 import torch
 
-from kronos_edge import benchmark_check, container, eager_check, env_check, tensorrt_check
+from kronos_edge import benchmark_check, container, eager_check, env_check, kernelgen_check, tensorrt_check
 
 ENVIRONMENT = {
     "gpu": "NVIDIA GeForce RTX 5090",
@@ -118,6 +120,46 @@ class FakeEngineRunner:
 def engine_runner_stub(monkeypatch):
     """The engine only runs on the GPU in the image; here it is the eager model behind the runner interface."""
     monkeypatch.setattr(benchmark_check, "load_engine", FakeEngineRunner)
+
+
+# One evaluator result, the shape of an entry of `eval compare`'s results.json (and of a kernelgen
+# report's `eval_result`): correctness flags plus the measured speedup.
+PASSING_RESULT = {
+    "stage": "benchmark",
+    "correctness_checks": {
+        "all_checks_passed": True, "all_shapes_match": True, "all_dtypes_match": True,
+        "all_output_values_match": True, "results": [{"all_checks_passed": True}],
+    },
+    "reference_benchmark": {"runtimes_ms": [2.0, 2.1], "median_runtime_ms": 2.05},
+    "candidate_benchmark": {"runtimes_ms": [1.0, 1.05], "median_runtime_ms": 1.025},
+    "speedup": 2.0,
+}
+
+FAKE_KERNEL = "import torch\n\n\nclass Model(torch.nn.Module):\n    def forward(self, x):\n        return x\n"
+
+FAKE_TASK_LINE = "  task 00000000-0000-0000-0000-000000000000 (completed)\n"
+
+
+def fake_toolkit(args, result=PASSING_RESULT):
+    """What a successful yasp-toolkit run leaves behind: the kernel and report, or the results.json."""
+
+    def option(name):
+        return Path(args[args.index(name) + 1])
+
+    if args[:2] == ["kernelgen", "compile"]:
+        option("--output").write_text(FAKE_KERNEL)
+        option("--report").write_text(json.dumps({"gpu_name": args[args.index("--gpu-name") + 1], "eval_result": result}))
+    elif args[:2] == ["eval", "compare"]:
+        option("--output").write_text(json.dumps({"opt_1": result}))
+    else:
+        raise AssertionError(f"unexpected toolkit command {args}")
+    return subprocess.CompletedProcess(["yasp-toolkit", *args], 0, stdout=FAKE_TASK_LINE, stderr="")
+
+
+@pytest.fixture(autouse=True)
+def toolkit_stub(monkeypatch):
+    """Stand in for yasp-toolkit, which needs a Yasp API key and the hosted service: write what a successful run would."""
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", fake_toolkit)
 
 
 @pytest.fixture

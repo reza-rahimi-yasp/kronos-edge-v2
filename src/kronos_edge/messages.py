@@ -42,6 +42,11 @@ EAGER = {
     "forward": "Your model cannot be run through eager mode. Either fix it or contact support.",
 }
 
+PT2 = {
+    "pt2_capture": "Your model could not be traced by torch.export for the kernelgen reference. Fix the construct named below.",
+    "pt2_save": "The kernelgen reference (model.pt2) could not be written to the artifact directory.",
+}
+
 ONNX = {
     "onnx_exporter": "The ONNX exporter is not available inside the environment container. Contact support.",
     "onnx_precision": "Your model could not be cast to the requested precision for export. Either fix it or contact support.",
@@ -72,4 +77,15 @@ BENCHMARK = {
     "accuracy": "The TensorRT engine's outputs do not match the eager outputs within the threshold in config.yaml.",
 }
 
-CUSTOMER_MESSAGES = merge(ENV, CONTAINER, EAGER, ONNX, ONNXSIM, TENSORRT, BENCHMARK)
+KERNELGEN = {
+    "kernelgen_reference": "The kernelgen reference (model.pt2) is missing from the artifact directory. Contact support.",
+    "kernelgen_engine": "The TensorRT engine (model.engine) kernelgen waits for is missing from the artifact directory. Contact support.",
+    "kernelgen_toolkit": "The yasp-toolkit command is not available. Install yasp-agent[gaia] into the environment that runs the check.",
+    "kernelgen_credentials": "No Yasp API key was found. Export YASP_API_KEY (see .env.example) or store a key with `yasp-toolkit keyring set`.",
+    "kernelgen_compile": "The kernelgen optimization did not produce a kernel. The toolkit's output is below.",
+    "kernelgen_eval": "The kernelgen kernel could not be evaluated on this machine. The toolkit's output is below.",
+    "kernelgen_eval_results": "The evaluator's results for the kernelgen kernel could not be read. Contact support.",
+    "kernelgen_eval_incorrect": "The kernelgen kernel failed the evaluation on this machine: it did not build or did not match your model. The evaluator's report is below. Contact support.",
+}
+
+CUSTOMER_MESSAGES = merge(ENV, CONTAINER, EAGER, PT2, ONNX, ONNXSIM, TENSORRT, BENCHMARK, KERNELGEN)

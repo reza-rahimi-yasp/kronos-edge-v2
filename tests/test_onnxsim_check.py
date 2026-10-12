@@ -47,7 +47,7 @@ def test_failure_stages(tmp_path, caplog, monkeypatch, env_files, simplify, stag
     assert state["error"] == stage
     assert fragment in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == [stage]
-    assert sorted(f.name for f in (tmp_path / ".artifact").iterdir()) == ["model.onnx"]
+    assert sorted(f.name for f in (tmp_path / ".artifact").iterdir()) == ["model.onnx", "model.pt2"]
 
 
 def test_large_simplified_model_is_saved_with_external_data(monkeypatch, good_model, artifacts):
@@ -58,7 +58,7 @@ def test_large_simplified_model_is_saved_with_external_data(monkeypatch, good_mo
 
     assert state.get("error") is None
     assert sorted(f.name for f in artifacts.iterdir()) == [
-        "benchmark.json", "model.engine", "model.onnx", "model_simplified.onnx", "model_simplified.onnx.data"
+        "benchmark.json", "model.engine", "model.onnx", "model.pt2", "model_simplified.onnx", "model_simplified.onnx.data"
     ]
     in_state = state["simplified_onnx"]
     assert in_state.graph.initializer and all(t.raw_data for t in in_state.graph.initializer)
