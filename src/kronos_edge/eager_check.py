@@ -1,4 +1,4 @@
-"""Eager-mode check: run a user's model.py against input.npz and report.
+"""Eager-mode check: load a user's model.py, validate input.npz, run forward.
 
 model.py must define ``Model`` (a torch.nn.Module subclass) and
 ``get_inputs()`` or ``get_fwd_args()`` returning the reference inputs.
@@ -7,20 +7,16 @@ input.npz holds one array per reference input under ``arr_0 .. arr_n-1``,
 which is what ``np.savez("input.npz", *arrays)`` writes.
 """
 
-import argparse
 import importlib.util
 import inspect
-import logging
-from collections.abc import Callable
-from typing import TypedDict
 
 import numpy as np
 import torch
-from langgraph.graph import END, START, StateGraph
 
-from kronos_edge.log import PACKAGE_LOGGER, ErrorCollector, configure, get_logger
+from kronos_edge.log import get_logger
+from kronos_edge.state import State, fail
 
-logger = get_logger(f"{PACKAGE_LOGGER}.eager_check")
+logger = get_logger(__name__)
 
 INPUT_NAMES = ("get_inputs", "get_fwd_args")
 
@@ -38,25 +34,6 @@ CUSTOMER_MESSAGES = {
 
 class InvalidUserInputs(ValueError):
     """input.npz does not match the reference inputs from get_inputs()."""
-
-
-class State(TypedDict, total=False):
-    model_path: str
-    npz_path: str
-    collector: ErrorCollector
-    model: torch.nn.Module
-    get_inputs: Callable[[], object]
-    user_inputs: tuple[torch.Tensor, ...]
-    error: str | None
-    outcome: str
-    customer_message: str
-
-
-def _fail(stage: str, exc: Exception) -> State:
-    extra = {"stage": stage}
-    logger.error("%s: %s", type(exc).__name__, exc, extra=extra)
-    logger.debug("traceback", exc_info=exc, extra=extra)
-    return {"error": stage}
 
 
 def _import_module(path: str):
@@ -107,7 +84,7 @@ def load_model(state: State) -> State:
             init_inputs = ()
         model = model_cls(*init_inputs).eval()
     except Exception as exc:
-        return _fail(stage, exc)
+        return fail(logger, stage, exc)
     return {"model": model, "get_inputs": get_inputs}
 
 
@@ -135,7 +112,7 @@ def validate_inputs(state: State) -> State:
                 )
             user_inputs.append(tensor)
     except Exception as exc:
-        return _fail(stage, exc)
+        return fail(logger, stage, exc)
     return {"user_inputs": tuple(user_inputs)}
 
 
@@ -146,66 +123,5 @@ def run_eager(state: State) -> State:
         with torch.no_grad():
             state["model"](*state["user_inputs"])
     except Exception as exc:
-        return _fail(stage, exc)
+        return fail(logger, stage, exc)
     return {}
-
-
-def success(state: State) -> State:
-    logger.info("eager mode run succeeded")
-    return {"outcome": "success", "customer_message": "Eager mode run succeeded."}
-
-
-def failure(state: State) -> State:
-    records = [r for r in state["collector"].records if r.levelno >= logging.ERROR]
-    stage = records[0].stage if records else state["error"]
-    detail = records[0].getMessage() if records else ""
-    message = f"{CUSTOMER_MESSAGES[stage]}\n{detail}".rstrip()
-    return {"outcome": "failure", "customer_message": message}
-
-
-def route_on_error(state: State) -> str:
-    return "failure" if state.get("error") else "ok"
-
-
-def build_graph():
-    graph = StateGraph(State)
-    graph.add_node("load_model", load_model)
-    graph.add_node("validate_inputs", validate_inputs)
-    graph.add_node("run_eager", run_eager)
-    graph.add_node("success", success)
-    graph.add_node("failure", failure)
-    graph.add_edge(START, "load_model")
-    graph.add_conditional_edges("load_model", route_on_error, {"ok": "validate_inputs", "failure": "failure"})
-    graph.add_conditional_edges("validate_inputs", route_on_error, {"ok": "run_eager", "failure": "failure"})
-    graph.add_conditional_edges("run_eager", route_on_error, {"ok": "success", "failure": "failure"})
-    graph.add_edge("success", END)
-    graph.add_edge("failure", END)
-    return graph.compile()
-
-
-def run_check(model_path, npz_path) -> State:
-    collector = ErrorCollector()
-    package_logger = logging.getLogger(PACKAGE_LOGGER)
-    package_logger.addHandler(collector)
-    try:
-        return build_graph().invoke(
-            {"model_path": str(model_path), "npz_path": str(npz_path), "collector": collector}
-        )
-    finally:
-        package_logger.removeHandler(collector)
-
-
-def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("model_path")
-    parser.add_argument("npz_path")
-    parser.add_argument("--log-level", default="INFO")
-    args = parser.parse_args(argv)
-    configure(args.log_level)
-    state = run_check(args.model_path, args.npz_path)
-    print(state["customer_message"])
-    return 0 if state["outcome"] == "success" else 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

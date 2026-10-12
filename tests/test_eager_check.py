@@ -3,7 +3,7 @@ import logging
 import numpy as np
 import pytest
 
-from kronos_edge.eager_check import main, route_on_error, run_check
+from kronos_edge.workflow import main, route_on_error, run_check
 
 CONV_RELU = """
 import torch
