@@ -1,102 +1,66 @@
 # AGENTS.md
 
-Instructions for AI coding agents working in this repository.
+Decisions that govern this repository. `README.md` has the user contract and
+the commands; `architecture.md` has the data flow. Keep this file to
+decisions: do not add file listings, commands, or summaries here.
 
-## What this repo is
+## Structure
 
-A LangGraph state machine that validates a user's `config.yaml` against the
-supported environments, then runs their PyTorch `model.py` with the inputs in
-their `input.npz` in eager mode on the GPU, inside that environment's Docker
-container. `README.md` has the
-user-facing contract and how to run it. `architecture.md` has the state
-diagram, the component list, the failure stages, and how to add a check.
+- Two LangGraph graphs: the host graph validates config and environment, the
+  container graph runs the model. The host never runs user code.
+- The host must import without torch or numpy. Only the container graph's
+  modules (`eager_check`, `onnx_check`) import the model stack. A test
+  enforces it.
+- Customer-facing text lives only in `messages.py`, one table per check,
+  keyed by stage. Stage names are one flat namespace across all checks;
+  `messages.merge()` and a test reject duplicates, and every `stage = "..."`
+  in a check must have an entry.
+- A registry entry in `environments.yaml`, its Dockerfile under `docker/`,
+  and the image labels state the same versions. Change all three together.
+- The container talks to the host only through `report.json` in the mounted
+  report directory. Never through stdout: the user's model owns stdout. Logs
+  go to stderr, which the host inherits.
+- The ONNX export is a check, not an output: it runs in memory and no `.onnx`
+  file is written.
 
-## Repository map
-
-| Path | What lives there |
-|---|---|
-| `src/kronos_edge/log.py` | Logging wrapper. `TRACE` level, `configure()`, `get_logger()`, and the `stage` record field. |
-| `src/kronos_edge/messages.py` | Every customer-facing message, keyed by stage, grouped per check, merged with duplicate detection. No heavy imports. |
-| `src/kronos_edge/state.py` | Shared `State`, `route_on_error()`, `fail()`. No torch import; model fields are typed `Any`. |
-| `src/kronos_edge/config.py` | Pydantic schema for `config.yaml` and the registry; `parse_config()`, `load_environments()`. |
-| `src/kronos_edge/environments.yaml` | Registry of supported environments. One entry today. Must agree with its Dockerfile. |
-| `src/kronos_edge/env_check.py` | The environment check nodes and the `docker` and `nvidia-smi` probes. |
-| `docker/<name>/Dockerfile` | One per registry entry, pinning the entry's CUDA, TensorRT, and torch versions. `.dockerignore` keeps `.venv` out of the build context. |
-| `src/kronos_edge/container.py` | The `run_in_container` host node and the `docker run` probe. |
-| `src/kronos_edge/eager_check.py` | The eager check nodes, `InvalidUserInputs`, its sub-graph, and the `main()` that runs inside the container and writes the JSON report. The only host-side module that imports torch, and the host never imports it. |
-| `src/kronos_edge/workflow.py` | Host graph assembly, `success` and `failure` nodes, `run_check()`, CLI `main()`. |
-| `tests/conftest.py` | Shared fixtures. Autouse patches replace `env_check.image_exists` and `env_check.host_gpu`, so tests never shell out. |
-| `tests/test_messages.py`, `tests/test_container.py`, `tests/test_env_check.py`, `tests/test_eager_check.py` | All tests. Fixtures are source strings written to `tmp_path`; nothing binary is committed. |
-| `pyproject.toml` | Runtime deps, a `dev` dependency group with pytest, and `pythonpath = ["src"]` for pytest. No build system. |
-| `requirements.txt` | Pinned runtime deps, kept in sync with `pyproject.toml`. |
-
-## Running things
-
-```bash
-.venv/bin/pytest                                  # all tests
-PYTHONPATH=src .venv/bin/python -m kronos_edge.workflow config.yaml model.py input.npz
-docker build -f docker/rtx5090-cuda130/Dockerfile -t kronos-edge:rtx5090-cuda130 .
-```
-
-A gitignored `.venv` is expected at the repo root. Do not add lockfiles.
-
-## Conventions in this code
+## Node conventions
 
 - Every node wraps its body in one `try/except Exception` and returns
   `fail(logger, stage, exc)` on error. Exceptions never escape a node.
 - Failure details travel in state (`error`, `error_detail`), never in a shared
   log buffer. Logs are for operators; state is for the workflow.
 - Log through `kronos_edge.log.get_logger` and tag records with
-  `extra={"stage": ...}`. A module that can run under `python -m` must name
-  its logger explicitly, because `__name__` becomes `__main__` there.
-- Customer-facing text lives only in `messages.py`, one table per check,
-  keyed by stage. Stage names are one flat namespace across all checks;
-  `messages.merge()` and a test reject duplicates, and every `stage = "..."`
-  in a check must have an entry.
-- The host (`workflow`, `container`, `env_check`, `state`, `config`, `log`,
-  `messages`) must import without torch or numpy. A test enforces it. Only
-  `eager_check` may import the model stack, and only the container runs it.
-- A registry entry, its Dockerfile, and the image labels must state the same
-  versions. Change all three together.
+  `extra={"stage": ...}`. A module that can run under `python -m` names its
+  logger explicitly, because `__name__` becomes `__main__` there.
 - Anything that shells out (`docker`, `nvidia-smi`) is a module-level function
   so tests can replace it with `monkeypatch`.
-- The container talks to the host only through `report.json` in the mounted
-  report directory, validated by `container.Report`. Never through stdout:
-  the user's model owns stdout. Logs go to stderr, which the host inherits.
-- Rebuild the image after changing anything under `src/`; it is copied in.
+
+## Testing
+
 - Tests come first: add the scenario to the parametrized table, see it fail,
   then implement.
+- One test file per check. Fixtures are source strings written to
+  `tmp_path`; nothing binary is committed. Tests never shell out: autouse
+  fixtures replace the `docker` and `nvidia-smi` probes and run the container
+  graph in-process on CPU.
+- A gitignored `.venv` is expected at the repo root. No lockfiles.
+
+## Working rules
+
+- Work only inside this repository. Do not read, reference, or borrow code
+  from any other project on this machine, and do not assume anything about
+  the project beyond what is in it.
+- Implement the minimum change that satisfies the request. No extra features,
+  refactors, abstractions, or "while I'm here" cleanups. Do not add
+  dependencies, tooling, or scaffolding unless the request requires it.
+- Prefer editing existing files over creating new ones. Match the existing
+  style of the code you touch.
+- If the request is ambiguous, ask a concise clarifying question before
+  writing code. State any small, low-risk assumption explicitly.
+- Rebuild the image after changing anything under `src/`; it is copied in.
 - Branch off `main`, one PR per concern, commits that each do one thing.
-
-## Scope
-
-- Work only inside this repository. Do not read, reference, or borrow code from
-  any other project on this machine.
-- Do not assume anything about the project beyond what is in this repo. If the
-  codebase does not show it, treat it as unknown.
-
-## Implementation rules
-
-- Implement the minimum change that satisfies the user's request. No extra
-  features, refactors, abstractions, or "while I'm here" cleanups.
-- Do not add dependencies, tooling, config, or scaffolding unless the request
-  requires it.
-- Keep changes small and reviewable. Prefer editing existing files over
-  creating new ones.
-- Match the existing style and structure of the code you touch.
-
-## When unsure
-
-- If the request is ambiguous, or you are not sure which feature or behavior
-  the user wants, ask a concise clarifying question before writing code.
-- Do not guess at requirements. A wrong assumption costs more than a question.
-- State any small, low-risk assumption you do make explicitly in your reply.
-
-## Before finishing
-
-- Run the tests and report the result verbatim.
-- Verify the change does what was asked and nothing more.
-- Update `README.md`, `architecture.md`, or this file when the change alters
-  the user contract, a component, or a convention described there.
-- Report exactly what was changed, what was not done, and anything that still
-  needs the user's input.
+- Before finishing: run the tests and report the result verbatim, verify the
+  change does what was asked and nothing more, update `README.md`,
+  `architecture.md`, or this file when the change alters the user contract,
+  the data flow, or a decision, and report what was changed, what was not
+  done, and anything that still needs the user's input.

@@ -1,5 +1,7 @@
 langgraph==1.2.14
 numpy==2.5.3
+onnx==1.23.2
+onnxscript==0.7.2
 torch==2.14.1
 pydantic==2.14.0
 pyyaml==6.0.3

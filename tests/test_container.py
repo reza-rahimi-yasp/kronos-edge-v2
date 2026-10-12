@@ -85,6 +85,7 @@ def test_docker_failure_is_reported(monkeypatch, caplog, env_files, good_model):
         pytest.param('{"error": 5}', 1, id="wrong_type"),
         pytest.param('{"error": null}', 137, id="success_report_but_killed"),
         pytest.param('{"error": "forward", "error_detail": "x"}', 0, id="failure_report_but_exit_zero"),
+        pytest.param('{"error": "onnx_capture", "error_detail": "x"}', 0, id="onnx_failure_report_but_exit_zero"),
     ],
 )
 def test_invalid_reports_are_container_failures(monkeypatch, caplog, env_files, good_model, report, code):
@@ -172,6 +173,8 @@ def test_user_prints_do_not_corrupt_the_report(tmp_path, good_model):
     assert result.returncode == 0, result.stderr
     assert "loading without newline" in result.stdout and "bye from atexit" in result.stdout
     assert json.loads(report_path.read_text()) == {"error": None, "error_detail": ""}
+    assert "[torch.onnx]" not in result.stdout
+    assert list(tmp_path.rglob("*.onnx")) == []
 
 
 def test_cuda_unavailable_is_its_own_stage(monkeypatch, good_model):

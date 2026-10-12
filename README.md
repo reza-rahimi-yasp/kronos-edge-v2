@@ -5,13 +5,14 @@ in an environment we support. You give it a `config.yaml` naming the GPU and
 software versions you want, a `model.py`, and an `input.npz`. It matches the
 config to a supported environment, then runs the check inside that
 environment's Docker container on the GPU: it loads the model, validates the
-inputs against the model's own reference inputs, runs one forward pass, and
-prints either a success line or a message saying what to fix.
+inputs against the model's own reference inputs, runs one forward pass,
+exports the model to ONNX with the dynamo exporter, and prints either a
+success line or a message saying what to fix.
 
 ## Requirements
 
 - Python 3.12 or newer
-- The packages in `requirements.txt` (`langgraph`, `numpy`, `pydantic`, `pyyaml`, `torch`)
+- The packages in `requirements.txt` (`langgraph`, `numpy`, `onnx`, `onnxscript`, `pydantic`, `pyyaml`, `torch`)
 - Docker with the NVIDIA container runtime, and `nvidia-smi` on the path
 
 ## Install
@@ -113,8 +114,12 @@ PYTHONPATH=src python -m kronos_edge.workflow path/to/config.yaml path/to/model.
 On success it prints:
 
 ```
-Eager mode run succeeded.
+Eager mode run and ONNX export succeeded.
 ```
+
+The ONNX export runs `torch.onnx.export(..., dynamo=True)` on the same model
+and inputs the forward pass used. The exported model is not saved; the check
+only reports whether the export works.
 
 and exits with code 0. On failure it prints a message naming the problem,
 followed by the underlying exception, and exits with code 1. For example:
@@ -149,6 +154,9 @@ and dtype of every input, `DEBUG` adds the full traceback of a failure.
 | input.npz could not be read. | Check the path, and that the file was written with `numpy.savez`. |
 | input.npz does not match the inputs returned by get_inputs(). | The detail line names the key and the expected versus found shape and dtype. |
 | Your model cannot be run through eager mode. Either fix it or contact support. | The forward pass raised. The detail line shows the exception. |
+| The ONNX exporter is not available inside the environment container. Contact support. | The image lacks `onnx` or `onnxscript`. |
+| Your model could not be traced by torch.export for ONNX export. Fix the construct named below. | `torch.export` could not capture the model, for example a branch on a tensor value. The detail names the construct and the line in `model.py`. |
+| Your model was traced but an operator has no ONNX translation. Replace the operator named below or contact support. | The detail names the operator the dynamo exporter cannot translate. |
 
 ## Run the tests
 
