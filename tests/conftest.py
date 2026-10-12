@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -66,10 +67,12 @@ def host_matches_registry(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def eager_check_runs_in_process(monkeypatch):
-    """Stand in for `docker run`: run the eager sub-graph here, on CPU, and return its JSON report."""
+    """Stand in for `docker run`: run the eager sub-graph here, on CPU, write its report, return its exit code."""
 
-    def fake_run_container(image, model_path, npz_path, device, log_level):
-        return eager_check.report(eager_check.run(model_path, npz_path, device="cpu"))
+    def fake_run_container(image, model_path, npz_path, report_dir, device, log_level):
+        state = eager_check.run(model_path, npz_path, device="cpu")
+        (Path(report_dir) / container.REPORT_FILE).write_text(eager_check.report(state))
+        return 0 if state.get("error") is None else 1
 
     monkeypatch.setattr(container, "run_container", fake_run_container)
 
