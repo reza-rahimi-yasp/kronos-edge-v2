@@ -8,7 +8,8 @@ cannot run inside the environment container. Two nodes:
 
 - ``kernelgen``: once the container has written the reference ``model.pt2``
   and the TensorRT ``model.engine`` it waits for, runs
-  ``yasp-toolkit kernelgen compile`` on the reference for the config's GPU.
+  ``yasp-toolkit kernelgen compile`` on the reference for the config's GPU,
+  with its in-compile evaluations routed by the config's ``eval_routing``.
   The command polls the job until it is terminal; the optimized kernel lands
   in the artifact directory as ``kernel.py`` next to the job's
   ``kernelgen_report.json``.
@@ -95,9 +96,8 @@ def kernelgen(state: State) -> State:
         args = [
             "kernelgen", "compile", "--reference", str(reference), "--source", state["model_path"],
             "--gpu-name", config.gpu, "--output", str(kernel), "--report", str(artifacts / REPORT_FILE), "--no-progress",
+            "--eval-routing", config.eval_routing,
         ]
-        if config.eval_routing:
-            args += ["--eval-routing", config.eval_routing]
         logger.info("optimizing the model with kernelgen for %s", config.gpu, extra={"stage": stage})
         try:
             _invoke(stage, args, kernel)
@@ -122,12 +122,11 @@ def evaluate_kernelgen(state: State) -> State:
         args = [
             "eval", "compare", "--reference", str(artifacts / PT2_FILE), "--implementation", state["kernel_path"],
             "--source", state["model_path"], "--gpu-name", config.gpu, "--output", str(results), "--no-progress",
+            "--routing", config.eval_routing,
         ]
-        if config.eval_routing:
-            args += ["--routing", config.eval_routing]
         logger.info(
-            "evaluating %s on this machine (%s%s)", state["kernel_path"], config.gpu,
-            f", routing {config.eval_routing}" if config.eval_routing else "", extra={"stage": stage},
+            "evaluating %s on this machine (%s, routing %s)", state["kernel_path"], config.gpu, config.eval_routing,
+            extra={"stage": stage},
         )
         try:
             _invoke(stage, args, results)

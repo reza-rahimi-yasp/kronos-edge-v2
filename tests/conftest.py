@@ -20,7 +20,7 @@ ENVIRONMENT = {
 }
 
 # config.yaml: the environment fields plus the check settings.
-CONFIG = {**ENVIRONMENT, "precision": "fp32", "metric": "cosine", "threshold": 0.99}
+CONFIG = {**ENVIRONMENT, "precision": "fp32", "metric": "cosine", "threshold": 0.99, "eval_routing": "reza-fractal"}
 
 REGISTRY = {
     "environments": [

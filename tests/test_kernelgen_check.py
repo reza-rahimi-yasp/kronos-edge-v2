@@ -92,26 +92,33 @@ def test_success_records_the_speedup_and_names_it(tmp_path, caplog, env_files, g
     assert capsys.readouterr().out == ""  # the toolkit's output goes to the log, never to stdout
 
 
-@pytest.mark.parametrize(
-    "settings, compile_flag, eval_flag",
-    [
-        pytest.param({}, None, None, id="no_routing"),
-        pytest.param({"eval_routing": "reza-fractal"}, "--eval-routing", "--routing", id="routing"),
-    ],
-)
-def test_eval_routing_pins_this_machines_evaluator_for_both_commands(tmp_path, monkeypatch, env_files, settings, compile_flag, eval_flag):
+def test_eval_routing_pins_this_machines_evaluator_for_both_commands(tmp_path, monkeypatch, env_files):
     calls = []
     monkeypatch.setattr(kernelgen_check, "run_toolkit", recording_toolkit(calls, tmp_path))
 
-    state = run_with_config(tmp_path, env_files, **settings)
+    state = run_with_config(tmp_path, env_files, eval_routing="reza-fractal")
 
     assert state["outcome"] == "success"
     (compile_args, _), (eval_args, _) = calls
-    if compile_flag is None:
-        assert "--eval-routing" not in compile_args and "--routing" not in eval_args
-    else:
-        assert option(compile_args, compile_flag) == settings["eval_routing"]
-        assert option(eval_args, eval_flag) == settings["eval_routing"]
+    assert option(compile_args, "--eval-routing") == "reza-fractal"
+    assert option(eval_args, "--routing") == "reza-fractal"
+
+
+def test_a_config_without_eval_routing_is_rejected_before_any_toolkit_job(tmp_path, caplog, monkeypatch, env_files):
+    """Without the key, any evaluator advertising the GPU could take the job; the check must not submit one."""
+    calls = []
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", recording_toolkit(calls, tmp_path))
+    _, environments = env_files
+    config = write_yaml(tmp_path / "config.yaml", {k: v for k, v in CONFIG.items() if k != "eval_routing"})
+
+    state = run_check(config, write_model(tmp_path, CONV_RELU), write_npz(tmp_path, [X]), environments_path=environments)
+
+    assert state["outcome"] == "failure"
+    assert state["error"] == "validate_config"
+    assert "eval_routing" in state["customer_message"]
+    assert [r.stage for r in error_records(caplog)] == ["validate_config"]
+    assert calls == []
+    assert not (tmp_path / ".artifact").exists()
 
 
 @pytest.mark.parametrize(

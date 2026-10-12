@@ -57,15 +57,15 @@ and never commit it. `.env` is gitignored.
 The kernelgen evaluation runs on this machine, on the evaluator you
 registered from it (`yasp-eval register --tag routing=<key>`); the evaluator
 advertises the GPU name `nvidia-smi` reports, which is the `gpu` of your
-config. Put that routing key in the config (`eval_routing`, below) so the
-evaluation is pinned to it.
+config. Put that routing key in the config (`eval_routing`, below): it is
+required, so the evaluation is always pinned to your evaluator.
 
 ## Prepare your config file
 
 `config.yaml` names the environment you want, the settings for the checks,
-and optionally the evaluator for the kernelgen kernel. The first eight fields
-are required and no other fields are allowed. Version numbers must be quoted
-so YAML does not read them as numbers; `threshold` is a number.
+and the evaluator for the kernelgen kernel. All nine fields are required and
+no other fields are allowed. Version numbers must be quoted so YAML does not
+read them as numbers; `threshold` is a number.
 
 | Field | Type | Example |
 |---|---|---|
@@ -77,7 +77,7 @@ so YAML does not read them as numbers; `threshold` is a number.
 | `precision` | `fp32` or `fp16` | `fp16` |
 | `metric` | `cosine` | `cosine` |
 | `threshold` | number from 0 to 1 | `0.99` |
-| `eval_routing` | non-empty string, optional | `reza-fractal` |
+| `eval_routing` | non-empty string | `reza-fractal` |
 
 The first five fields must match one supported environment exactly. The
 supported environments are listed in `src/kronos_edge/environments.yaml`.
@@ -103,8 +103,10 @@ same artifact directory.
 
 `eval_routing` is also a setting. It is the routing key of the evaluator
 registered from this machine; kernelgen's in-compile evaluations and the
-final evaluation are pinned to it. Leave it out and they go to any evaluator
-advertising your config's `gpu`.
+final evaluation are pinned to it. It is required: without it any evaluator
+advertising your config's `gpu` could take the job, and the check must
+evaluate on this machine, so a config that omits it is rejected before any
+job is submitted.
 
 `metric` names how the engine's outputs are compared with the eager outputs.
 Only cosine similarity is implemented, so only `cosine` is accepted.

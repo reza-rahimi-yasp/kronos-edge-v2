@@ -26,7 +26,10 @@ decisions: do not add file listings, commands, or summaries here.
   and from the uncast model.
 - The kernelgen evaluation runs on this machine: `eval compare` is routed to
   the evaluator registered from it by the `eval_routing` setting, and the same
-  key is passed to `kernelgen compile --eval-routing`. The kernel must pass
+  key is passed to `kernelgen compile --eval-routing`. The setting is
+  required, so a config without it fails validation before any job is
+  submitted; an unrouted job could land on any evaluator with the same GPU
+  name. The kernel must pass
   the evaluator's correctness checks; its speedup is reported, not judged, and
   no expectation is derived from TensorRT versus the eager run.
 - `config.yaml` has two kinds of fields. The five environment fields must

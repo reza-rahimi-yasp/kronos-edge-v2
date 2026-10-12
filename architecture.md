@@ -56,8 +56,8 @@ Every node either advances the state or records a failure stage in
 
 - `load_config` (`env_check.py`): reads and validates the user's `config.yaml`
   against the Pydantic schema in `config.py`: the five environment fields plus
-  the `precision`, `metric`, and `threshold` settings. Stages: `read_config`,
-  `validate_config`.
+  the `precision`, `metric`, `threshold`, and `eval_routing` settings, all
+  required. Stages: `read_config`, `validate_config`.
 - `match_environment` (`env_check.py`): loads `environments.yaml`, finds the
   entry equal to the config on the five environment fields, and checks the host GPU via
   `nvidia-smi` and the image via `docker image inspect`. Stages:
