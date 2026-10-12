@@ -146,8 +146,10 @@ The benchmark warms each side up with 20 runs, then times 200 runs one by
 one and reports the mean, median, and 95th percentile of those latencies.
 The speedup is the ratio of the medians. Eager runs the model as you wrote
 it; TensorRT runs the engine at the configured precision. Each output of the
-model is compared with the engine's output at the same position by the
-configured metric, and every value is printed.
+model, in the order they are returned (a dict's insertion order), is compared
+with the engine's output at the same position by the configured metric, and
+every value is printed. A model that changes its inputs in place is fine:
+every stage runs it on copies of your inputs.
 
 The ONNX export runs `torch.onnx.export(..., dynamo=True)` on the same model
 and inputs the forward pass used, `onnxsim` simplifies the result, and

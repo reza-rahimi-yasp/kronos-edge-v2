@@ -123,8 +123,8 @@ def run_eager(state: State) -> State:
     stage = "forward"
     try:
         logger.info("running forward in eager mode", extra={"stage": stage})
-        with torch.no_grad():
-            state["model"](*state["user_inputs"])
+        with torch.no_grad():  # on copies: a model that mutates its inputs must not alter what later nodes see
+            state["model"](*[t.clone() for t in state["user_inputs"]])
     except Exception as exc:
         return fail(logger, stage, exc)
     return {}

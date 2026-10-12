@@ -8,8 +8,9 @@ the checks produce for the user go to the mounted artifact directory.
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from kronos_edge import artifacts as artifact_files
 from kronos_edge.log import get_logger
@@ -39,7 +40,7 @@ class Benchmark(BaseModel):
     speedup: float
     metric: str
     threshold: float
-    values: list[float]
+    values: list[Annotated[float, Field(allow_inf_nan=False)]]
 
 
 class Report(BaseModel):

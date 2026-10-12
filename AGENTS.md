@@ -32,7 +32,16 @@ decisions: do not add file listings, commands, or summaries here.
   import failure, and the real paths are verified by a GPU run before each
   merge. The engine runner keeps the TensorRT `Runtime` alive for as long as
   the engine and reads shape-tensor inputs from host memory; both are
-  segfaults otherwise.
+  segfaults otherwise. An output whose shape is still unknown after shape
+  inference (data-dependent, such as `nonzero`) gets a TensorRT output
+  allocator rather than a preallocated buffer.
+- The user's inputs in state are never mutated: every node that runs the
+  model runs it on copies, since a model may update its inputs in place, and
+  the benchmark compares eager and the engine on the original values.
+- Model outputs are flattened with pytree, which is what the exporter does,
+  so tuples, lists, and dicts (insertion order) pair up with the ONNX outputs
+  by position. A non-finite metric value fails the accuracy check; the host
+  rejects a report carrying one.
 - Benchmarks report a distribution, never a single number: warm up, time each
   run, report mean, median, and p95 in ms for both sides, speedup as the
   ratio of medians. Eager is timed as the user wrote the model; the engine at

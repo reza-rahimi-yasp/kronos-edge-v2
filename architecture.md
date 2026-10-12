@@ -75,8 +75,8 @@ Run by `python -m kronos_edge.eager_check` with `--device cuda` and the
 - `validate_inputs` (`eager_check.py`): calls `get_inputs()`, loads
   `input.npz`, and checks keys, shapes, and dtypes. Stages: `get_inputs`,
   `load_npz`, `validate_inputs`.
-- `run_eager` (`eager_check.py`): one forward pass under `torch.no_grad()`.
-  Stage: `forward`.
+- `run_eager` (`eager_check.py`): one forward pass under `torch.no_grad()`
+  on copies of the inputs. Stage: `forward`.
 - `export_onnx` (`onnx_check.py`): casts a copy of the model and its float
   inputs to the configured precision unless they already have it, leaving
   the eager model in state untouched; then

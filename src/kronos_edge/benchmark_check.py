@@ -14,11 +14,13 @@ are read from host memory, so the runner keeps both alive.
 """
 
 import json
+import math
 import time
 from pathlib import Path
 
 import numpy as np
 import torch
+from torch.utils._pytree import tree_leaves
 
 from kronos_edge.artifacts import BENCHMARK_FILE
 from kronos_edge.log import PACKAGE_LOGGER, get_logger
@@ -34,12 +36,20 @@ METRIC = "cosine"
 
 
 def flatten_outputs(outputs) -> list[torch.Tensor]:
-    """Model outputs as a flat list of tensors, in the order the ONNX export emits them."""
-    if isinstance(outputs, torch.Tensor):
-        return [outputs]
-    if isinstance(outputs, (tuple, list)):
-        return [t for item in outputs for t in flatten_outputs(item)]
-    raise TypeError(f"unsupported output type {type(outputs).__name__}; outputs must be tensors or tuples of tensors")
+    """Model outputs as a flat list of tensors, in the order the ONNX export emits them.
+
+    The exporter flattens with pytree, so tuples, lists, and dicts (insertion order) all match.
+    """
+    leaves = tree_leaves(outputs)
+    for leaf in leaves:
+        if not isinstance(leaf, torch.Tensor):
+            raise TypeError(f"unsupported output type {type(leaf).__name__}; every output must be a tensor")
+    return leaves
+
+
+def clone_inputs(inputs):
+    """Fresh copies, so a model that mutates its inputs in place cannot skew a later use of them."""
+    return tuple(t.detach().clone() for t in inputs)
 
 
 def cosine(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -78,7 +88,13 @@ def stats(samples: list[float]) -> dict[str, float]:
 
 
 class EngineRunner:
-    """Executes a serialized TensorRT engine on the user's inputs; ``outputs`` are torch tensors on the GPU."""
+    """Executes a serialized TensorRT engine on the user's inputs; ``outputs`` are torch tensors on the GPU.
+
+    Outputs whose shape depends on the data (for example ``torch.nonzero``)
+    are still ``-1`` after shape inference, so those get a TensorRT output
+    allocator that hands out GPU memory during the run and reports the shape
+    afterwards. ``outputs`` is read after a run.
+    """
 
     def __init__(self, state: State):
         import tensorrt as trt
@@ -109,16 +125,56 @@ class EngineRunner:
             self.context.set_input_shape(name, tuple(self.buffers[name].shape))
             self.context.set_tensor_address(name, self.buffers[name].data_ptr())
         self.output_names = [n for n in names if self.engine.get_tensor_mode(n) == trt.TensorIOMode.OUTPUT]
-        self.outputs = []
+        self.dtypes = {n: to_torch[self.engine.get_tensor_dtype(n)] for n in self.output_names}
+        self.allocators = {}
         for name in self.output_names:
             shape = tuple(self.context.get_tensor_shape(name))
-            self.buffers[name] = torch.empty(shape, dtype=to_torch[self.engine.get_tensor_dtype(name)], device=state["device"])
-            self.context.set_tensor_address(name, self.buffers[name].data_ptr())
-            self.outputs.append(self.buffers[name])
+            if -1 in shape:
+                self.allocators[name] = _OutputAllocator(trt, state["device"])
+                if not self.context.set_output_allocator(name, self.allocators[name]):
+                    raise RuntimeError(f"set_output_allocator failed for data-dependent output {name}")
+                logger.info("output %s has a data-dependent shape; allocating at run time", name, extra={"stage": "benchmark_engine"})
+            else:
+                self.buffers[name] = torch.empty(shape, dtype=self.dtypes[name], device=state["device"])
+                self.context.set_tensor_address(name, self.buffers[name].data_ptr())
 
     def run(self):
         if not self.context.execute_async_v3(torch.cuda.current_stream().cuda_stream):
             raise RuntimeError("; ".join(self.log.errors) or "execute_async_v3 returned False")
+
+    @property
+    def outputs(self) -> list[torch.Tensor]:
+        torch.cuda.synchronize()
+        return [
+            self.allocators[n].tensor(self.dtypes[n]) if n in self.allocators else self.buffers[n]
+            for n in self.output_names
+        ]
+
+
+def _OutputAllocator(trt, device):
+    class OutputAllocator(trt.IOutputAllocator):
+        """GPU memory for one data-dependent output, grown on demand; the shape arrives via notify_shape."""
+
+        def __init__(self):
+            super().__init__()
+            self.memory = torch.empty(0, dtype=torch.uint8, device=device)
+            self.shape = None
+
+        def reallocate_output_async(self, name, memory, size, alignment, stream):
+            if self.memory.numel() < size:
+                self.memory = torch.empty(max(size, 1), dtype=torch.uint8, device=device)
+            return self.memory.data_ptr()
+
+        def notify_shape(self, name, shape):
+            self.shape = tuple(shape)
+
+        def tensor(self, dtype) -> torch.Tensor:
+            if self.shape is None:
+                raise RuntimeError("the engine never reported the output's shape")
+            numel = math.prod(self.shape)
+            return self.memory[: numel * torch.empty(0, dtype=dtype).element_size()].view(dtype).reshape(self.shape)
+
+    return OutputAllocator()
 
 
 load_engine = EngineRunner
@@ -130,13 +186,16 @@ def benchmark(state: State) -> State:
         model, inputs, threshold = state["model"], state["user_inputs"], state["threshold"]
         on_cuda = str(state.get("device", "cpu")).startswith("cuda")
         logger.info("timing eager: %d warm-up, %d runs", WARMUP, RUNS, extra={"stage": stage})
+        # The reference, the timing loop, and the engine each get their own copies of the inputs:
+        # a model that mutates them in place must not change what the other two see.
+        timing_inputs = clone_inputs(inputs)
         with torch.no_grad():
-            eager_outputs = flatten_outputs(model(*inputs))
-            eager_ms = timed(lambda: model(*inputs), on_cuda)
+            eager_outputs = flatten_outputs(model(*clone_inputs(inputs)))
+            eager_ms = timed(lambda: model(*timing_inputs), on_cuda)
 
         stage = "benchmark_engine"
         try:
-            runner = load_engine(state)
+            runner = load_engine({**state, "user_inputs": clone_inputs(inputs)})
         except ImportError:
             stage = "benchmark_runtime"
             raise
@@ -156,11 +215,14 @@ def benchmark(state: State) -> State:
         values = [cosine(e, t) for e, t in zip(eager_outputs, trt_outputs)]
         for i, value in enumerate(values):
             logger.info("output %d: %s %.10f", i, METRIC, value, extra={"stage": stage})
-        failing = [i for i, v in enumerate(values) if v < threshold]
-        if failing:
-            raise ValueError(
-                "; ".join(f"output {i}: {METRIC} similarity {values[i]:.10f} is below the threshold {threshold}" for i in failing)
-            )
+        problems = []
+        for i, value in enumerate(values):
+            if not math.isfinite(value):
+                problems.append(f"output {i}: {METRIC} similarity is not a finite number ({value}); the engine's output is unusable")
+            elif value < threshold:
+                problems.append(f"output {i}: {METRIC} similarity {value:.10f} is below the threshold {threshold}")
+        if problems:
+            raise ValueError("; ".join(problems))
 
         result = {
             "eager_ms": stats(eager_ms), "tensorrt_ms": stats(trt_ms),

@@ -55,6 +55,7 @@ def test_cosine_similarity():
         pytest.param(torch.ones(2), [torch.ones(2)], id="tensor"),
         pytest.param((torch.ones(1), torch.zeros(1)), [torch.ones(1), torch.zeros(1)], id="tuple"),
         pytest.param([torch.ones(1), (torch.zeros(1), torch.ones(3))], [torch.ones(1), torch.zeros(1), torch.ones(3)], id="nested"),
+        pytest.param({"b": torch.ones(2), "a": torch.zeros(1)}, [torch.ones(2), torch.zeros(1)], id="dict_insertion_order"),
     ],
 )
 def test_flatten_outputs(outputs, flat):
@@ -62,9 +63,51 @@ def test_flatten_outputs(outputs, flat):
     assert [tuple(t.shape) for t in got] == [tuple(t.shape) for t in flat]
 
 
-def test_flatten_rejects_non_tensors():
+def test_flatten_rejects_non_tensor_leaves():
     with pytest.raises(TypeError, match="str"):
-        benchmark_check.flatten_outputs("not a tensor")
+        benchmark_check.flatten_outputs(("fine", torch.ones(1)))
+
+
+DICT_OUTPUT = SCALE.replace("return x * 2", 'return {"positive": x * 2, "negative": -x}')
+INPLACE_INPUT = SCALE.replace("return x * 2", "x.add_(1)\n        return x * x")
+
+
+def test_dict_outputs_are_compared_in_exporter_order(tmp_path, env_files):
+    state = run_with(tmp_path, env_files, source=DICT_OUTPUT, arrays=[ONES])
+
+    assert state["outcome"] == "success"
+    assert state["benchmark"]["values"] == [pytest.approx(1.0), pytest.approx(1.0)]
+
+
+def test_inplace_input_mutation_does_not_skew_the_comparison(tmp_path, monkeypatch, env_files):
+    """Every node runs the model on copies, so the engine and the reference see the user's original values."""
+    seen = {}
+
+    def recording(state):
+        seen["engine_input"] = state["user_inputs"][0].clone()
+        return FakeEngineRunner(state)
+
+    monkeypatch.setattr(benchmark_check, "load_engine", recording)
+
+    state = run_with(tmp_path, env_files, source=INPLACE_INPUT, arrays=[ONES])
+
+    assert state["outcome"] == "success"
+    assert state["benchmark"]["values"] == [pytest.approx(1.0)]
+    assert torch.equal(seen["engine_input"], torch.ones(64, 64))
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")], ids=["nan", "inf"])
+def test_nonfinite_score_fails_accuracy(tmp_path, caplog, monkeypatch, env_files, bad):
+    monkeypatch.setattr(
+        benchmark_check, "load_engine",
+        lambda state: FakeEngineRunner(state, perturb=lambda outs: [torch.full_like(outs[0], bad)]),
+    )
+
+    state = run_with(tmp_path, env_files, source=SCALE, arrays=[ONES], threshold=0.0)
+
+    assert state["error"] == "accuracy"
+    assert "not a finite number" in state["customer_message"]
+    assert [r.stage for r in error_records(caplog)] == ["accuracy"]
 
 
 def test_timed_returns_one_sample_per_run_after_warmup(monkeypatch):

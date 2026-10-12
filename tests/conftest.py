@@ -110,8 +110,8 @@ class FakeEngineRunner:
         self.outputs = None
 
     def run(self):
-        with torch.no_grad():
-            self.outputs = self.perturb(benchmark_check.flatten_outputs(self.model(*self.inputs)))
+        with torch.no_grad():  # like a real engine, never mutate the bound inputs
+            self.outputs = self.perturb(benchmark_check.flatten_outputs(self.model(*[t.clone() for t in self.inputs])))
 
 
 @pytest.fixture(autouse=True)

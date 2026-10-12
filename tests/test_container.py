@@ -181,6 +181,7 @@ def test_docker_failure_is_reported(monkeypatch, caplog, env_files, good_model):
         pytest.param('{"error": "onnx_capture", "error_detail": "x"}', 0, id="onnx_failure_report_but_exit_zero"),
         pytest.param('{"error": null, "benchmark": {"speedup": "fast"}}', 0, id="malformed_benchmark"),
         pytest.param('{"error": null, "benchmark": null}', 0, id="success_without_benchmark"),
+        pytest.param(json.dumps({"error": None, "benchmark": {**BENCHMARK, "values": [float("nan")]}}), 0, id="nan_score_in_report"),
     ],
 )
 def test_invalid_reports_are_container_failures(monkeypatch, caplog, env_files, good_model, report, code):
