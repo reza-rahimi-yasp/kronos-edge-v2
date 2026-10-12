@@ -1,0 +1,183 @@
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+import torch
+
+from conftest import GOOD_MODEL
+from kronos_edge import container, eager_check
+from kronos_edge.workflow import run_check
+
+TYPO_MODEL = GOOD_MODEL.replace("return self.conv(x)", "return self.convv(x)")
+
+NOISY_MODEL = GOOD_MODEL.replace(
+    "import torch\n",
+    "import atexit\nimport sys\nimport torch\n\n"
+    "sys.stdout.write('loading without newline')\n"
+    "atexit.register(lambda: print('bye from atexit'))\n",
+).replace("        return self.conv(x)", "        print('forward called', end='')\n        return self.conv(x)")
+
+
+def error_records(caplog):
+    return [r for r in caplog.records if r.levelname == "ERROR" and r.name.startswith("kronos_edge")]
+
+
+def run(env_files, good_model):
+    config, environments = env_files
+    return run_check(config, *good_model, environments_path=environments)
+
+
+def fake_container(monkeypatch, report=None, code=0):
+    """Replace docker run with something that writes `report` (if given) and exits with `code`."""
+
+    def fake(image, model_path, npz_path, report_dir, device, log_level):
+        if report is not None:
+            (Path(report_dir) / container.REPORT_FILE).write_text(report)
+        return code
+
+    monkeypatch.setattr(container, "run_container", fake)
+
+
+def test_build_command_mounts_files_and_requests_gpu(tmp_path):
+    model, npz, out = tmp_path / "m.py", tmp_path / "i.npz", tmp_path / "out"
+
+    cmd = container.build_command("kronos-edge:x", model, npz, out, "cuda", "DEBUG")
+
+    assert cmd[:3] == ["docker", "run", "--rm"]
+    assert cmd[cmd.index("--gpus") + 1] == "all"
+    assert f"{model.resolve()}:/work/model.py:ro" in cmd
+    assert f"{npz.resolve()}:/work/input.npz:ro" in cmd
+    assert f"{out.resolve()}:/work/out" in cmd
+    assert cmd[cmd.index("kronos-edge:x") + 1:] == [
+        "python", "-m", "kronos_edge.eager_check", "/work/model.py", "/work/input.npz",
+        "--report", "/work/out/report.json", "--device", "cuda", "--log-level", "DEBUG",
+    ]
+
+
+def test_docker_failure_is_reported(monkeypatch, caplog, env_files, good_model):
+    def boom(*args):
+        raise RuntimeError("docker: boom")
+
+    monkeypatch.setattr(container, "run_container", boom)
+
+    state = run(env_files, good_model)
+
+    assert state["outcome"] == "failure"
+    assert state["error"] == "container_run"
+    assert "support" in state["customer_message"]
+    assert "boom" in state["customer_message"]
+    assert [r.stage for r in error_records(caplog)] == ["container_run"]
+
+
+@pytest.mark.parametrize(
+    "report, code",
+    [
+        pytest.param(None, 0, id="no_report_file"),
+        pytest.param("not json", 0, id="not_json"),
+        pytest.param("null", 0, id="null"),
+        pytest.param("[]", 0, id="list"),
+        pytest.param("{}", 0, id="missing_error_key"),
+        pytest.param('{"error": null, "extra": 1}', 0, id="unknown_key"),
+        pytest.param('{"error": "bogus_stage", "error_detail": "x"}', 1, id="unknown_stage"),
+        pytest.param('{"error": 5}', 1, id="wrong_type"),
+        pytest.param('{"error": null}', 137, id="success_report_but_killed"),
+        pytest.param('{"error": "forward", "error_detail": "x"}', 0, id="failure_report_but_exit_zero"),
+    ],
+)
+def test_invalid_reports_are_container_failures(monkeypatch, caplog, env_files, good_model, report, code):
+    fake_container(monkeypatch, report, code)
+
+    state = run(env_files, good_model)
+
+    assert state["outcome"] == "failure"
+    assert state["error"] == "container_run"
+    assert [r.stage for r in error_records(caplog)] == ["container_run"]
+
+
+def test_exit_code_mismatch_names_the_code(monkeypatch, env_files, good_model):
+    fake_container(monkeypatch, '{"error": null}', 137)
+
+    state = run(env_files, good_model)
+
+    assert "137" in state["customer_message"]
+
+
+def test_inner_failure_passes_through_without_a_host_error(monkeypatch, caplog, env_files, good_model):
+    fake_container(monkeypatch, json.dumps({"error": "forward", "error_detail": "AttributeError: inner"}), 1)
+
+    state = run(env_files, good_model)
+
+    assert state["outcome"] == "failure"
+    assert state["error"] == "forward"
+    assert "cannot be run through eager mode" in state["customer_message"]
+    assert "AttributeError: inner" in state["customer_message"]
+    assert error_records(caplog) == []
+
+
+def test_container_runs_on_cuda(monkeypatch, env_files, good_model):
+    seen = {}
+
+    def record(image, model_path, npz_path, report_dir, device, log_level):
+        seen.update(image=image, device=device)
+        state = eager_check.run(model_path, npz_path, device="cpu")
+        (Path(report_dir) / container.REPORT_FILE).write_text(eager_check.report(state))
+        return 0
+
+    monkeypatch.setattr(container, "run_container", record)
+
+    state = run(env_files, good_model)
+
+    assert state["outcome"] == "success"
+    assert seen == {"image": "kronos-edge:rtx5090-cuda130", "device": "cuda"}
+
+
+@pytest.mark.parametrize(
+    "source, code, error",
+    [
+        pytest.param(GOOD_MODEL, 0, None, id="success"),
+        pytest.param(TYPO_MODEL, 1, "forward", id="failure"),
+    ],
+)
+def test_eager_main_writes_json_report(tmp_path, good_model, source, code, error):
+    _, npz = good_model
+    model = tmp_path / "model.py"
+    model.write_text(source)
+    report_path = tmp_path / "report.json"
+
+    exit_code = eager_check.main([str(model), str(npz), "--report", str(report_path), "--device", "cpu"])
+
+    report = json.loads(report_path.read_text())
+    assert exit_code == code
+    assert report["error"] == error
+    assert ("convv" in report["error_detail"]) == (error is not None)
+
+
+def test_user_prints_do_not_corrupt_the_report(tmp_path, good_model):
+    """Real subprocess, like the container: user code printing on stdout must not affect the report."""
+    _, npz = good_model
+    model = tmp_path / "model.py"
+    model.write_text(NOISY_MODEL)
+    report_path = tmp_path / "report.json"
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
+
+    result = subprocess.run(
+        [sys.executable, "-m", "kronos_edge.eager_check", str(model), str(npz),
+         "--report", str(report_path), "--device", "cpu"],
+        env=env, capture_output=True, text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "loading without newline" in result.stdout and "bye from atexit" in result.stdout
+    assert json.loads(report_path.read_text()) == {"error": None, "error_detail": ""}
+
+
+def test_cuda_unavailable_is_its_own_stage(monkeypatch, good_model):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    state = eager_check.run(*good_model, device="cuda")
+
+    assert state["error"] == "select_device"
+    assert "cuda" in state["error_detail"]

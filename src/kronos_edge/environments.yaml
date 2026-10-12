@@ -1,0 +1,11 @@
+# Supported environments. One for now: this machine. A user's config.yaml
+# must match one entry exactly on gpu, driver, cuda, tensorrt, and torch.
+environments:
+  - name: rtx5090-cuda130
+    image: kronos-edge:rtx5090-cuda130
+    dockerfile: docker/rtx5090-cuda130/Dockerfile
+    gpu: NVIDIA GeForce RTX 5090
+    driver: "580.95.05"
+    cuda: "13.0"
+    tensorrt: "11.4.0"
+    torch: "2.14.1"

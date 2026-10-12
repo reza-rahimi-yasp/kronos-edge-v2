@@ -6,13 +6,21 @@ from typing import TypedDict
 
 import torch
 
+from kronos_edge.config import Environment, EnvironmentConfig
+
 
 class State(TypedDict, total=False):
+    config_path: str
+    environments_path: str
+    config: EnvironmentConfig
+    environment: Environment
     model_path: str
     npz_path: str
     model: torch.nn.Module
     get_inputs: Callable[[], object]
     user_inputs: tuple[torch.Tensor, ...]
+    device: str
+    log_level: str
     error: str | None
     error_detail: str
     outcome: str
