@@ -1,25 +1,27 @@
 # Architecture
 
-The check is a LangGraph state machine with five working nodes and two
-terminal nodes. Every working node either advances the state or records a
-failure stage; a shared routing function sends any failure straight to the
-`failure` node.
+The check is two LangGraph state machines. The host graph validates the
+user's config and environment, then starts the matched environment's Docker
+container with the GPU attached. Inside the container, the eager graph loads
+the model and runs it. The container prints a one-line JSON report with the
+failure stage and detail, which the host merges into its own state, so the
+`failure` node picks the customer message the same way for both graphs.
+Every working node either advances the state or records a failure stage; a
+shared routing function sends any failure straight to `failure`.
 
 ## State flow
+
+Host graph, `workflow.build_graph()`:
 
 ```mermaid
 stateDiagram-v2
     [*] --> load_config
     load_config --> match_environment : ok
     load_config --> failure : error
-    match_environment --> load_model : ok
+    match_environment --> run_in_container : ok
     match_environment --> failure : error
-    load_model --> validate_inputs : ok
-    load_model --> failure : error
-    validate_inputs --> run_eager : ok
-    validate_inputs --> failure : error
-    run_eager --> success : ok
-    run_eager --> failure : error
+    run_in_container --> success : ok
+    run_in_container --> failure : error
     success --> [*]
     failure --> [*]
 
@@ -31,7 +33,25 @@ stateDiagram-v2
         match --> host_gpu
         host_gpu --> image_available
     }
+    state run_in_container {
+        container_run
+    }
+```
+
+Eager graph, `eager_check.build_graph()`, run by `python -m kronos_edge.eager_check`
+inside the container with `--device cuda`:
+
+```mermaid
+stateDiagram-v2
+    [*] --> load_model
+    load_model --> validate_inputs : ok
+    load_model --> [*] : error
+    validate_inputs --> run_eager : ok
+    validate_inputs --> [*] : error
+    run_eager --> [*]
+
     state load_model {
+        select_device --> import_module
         import_module --> find_model_class
         find_model_class --> find_get_inputs
         find_get_inputs --> init_model
@@ -59,9 +79,11 @@ customer message.
 | `src/kronos_edge/environments.yaml` | The registry of supported environments. One entry today: this machine. Each entry carries the five config fields plus `name`, `image`, and `dockerfile`. |
 | `src/kronos_edge/env_check.py` | The environment check: `load_config` and `match_environment` nodes, their six stages, and the `image_exists()` and `host_gpu()` probes that shell out to `docker` and `nvidia-smi`. Tests replace the probes. |
 | `docker/<name>/Dockerfile` | One Dockerfile per registry entry, pinning the same CUDA, TensorRT, and torch versions the entry declares. |
-| `src/kronos_edge/eager_check.py` | The eager check itself: the `load_model`, `validate_inputs`, and `run_eager` nodes, the `InvalidUserInputs` exception, and the `CUSTOMER_MESSAGES` table mapping its eight stages to user-facing text. Owns the `model.py` and `input.npz` contracts. |
-| `src/kronos_edge/workflow.py` | Composes the environment check and the eager check into the graph. Holds the `success` and `failure` terminal nodes, `build_graph()`, `run_check()`, and the command-line `main()`. The `failure` node reads the stage and detail from the run's own state, so concurrent runs never see each other's errors. |
-| `tests/conftest.py` | Shared fixtures: a valid config and registry, a good model, and autouse patches so tests never call `docker` or `nvidia-smi`. |
+| `src/kronos_edge/container.py` | The `run_in_container` host node. Builds the `docker run --gpus all` command with `model.py` and `input.npz` mounted read-only, inherits the container's stderr so logs stream through, and parses the JSON report. `run_container()` is the only function that shells out; tests replace it. |
+| `src/kronos_edge/eager_check.py` | The eager check itself: the `load_model`, `validate_inputs`, and `run_eager` nodes, the `InvalidUserInputs` exception, and the `CUSTOMER_MESSAGES` table mapping its nine stages to user-facing text. Owns the `model.py` and `input.npz` contracts. Also its own sub-graph, `run()`, `report()`, and the `main()` the container executes. |
+| `src/kronos_edge/workflow.py` | Composes the host graph. Holds the `success` and `failure` terminal nodes, `build_graph()`, `run_check()`, and the command-line `main()`. The `failure` node reads the stage and detail from the run's own state, so concurrent runs never see each other's errors. |
+| `tests/conftest.py` | Shared fixtures: a valid config and registry, a good model, and autouse patches so tests never call `docker` or `nvidia-smi`. The `docker run` stand-in runs the eager graph in-process on CPU and returns its JSON report, so host tests exercise the real round trip. |
+| `tests/test_container.py` | Container node tests: command construction, docker failure, non-JSON output, pass-through of an in-container failure, cuda is requested, the in-container JSON report and exit code, and the `select_device` stage. |
 | `tests/test_env_check.py` | Environment check tests: unreadable config, six schema violations, broken registry, a mismatch on each of the five fields, host GPU mismatch, missing image, and the CLI override. |
 | `tests/test_eager_check.py` | End-to-end tests through `run_check()` and `main()`. Four success paths, thirteen failure stages, routing, exit codes, and a two-thread isolation test. Model and npz files are generated into a temporary directory. |
 
@@ -75,6 +97,8 @@ customer message.
 | `match_environment` | `match_environment` | No registry entry equals the config on all five fields. |
 | `match_environment` | `host_gpu` | `nvidia-smi` reports a different GPU name or driver than the matched entry. |
 | `match_environment` | `image_available` | `docker image inspect` does not find the entry's image. |
+| `run_in_container` | `container_run` | `docker run` fails or prints no parsable report. |
+| `load_model` | `select_device` | `--device cuda` requested but torch cannot see a GPU in the container. |
 | `load_model` | `import_module` | `model.py` missing or fails to import. |
 | `load_model` | `find_model_class` | No `Model`, or it is not a `torch.nn.Module` subclass. |
 | `load_model` | `find_get_inputs` | Neither `get_inputs` nor `get_fwd_args` is defined. |
@@ -98,8 +122,10 @@ customer message.
 1. Put its nodes and its own `CUSTOMER_MESSAGES` table in a new module next
    to `eager_check.py`. Each node wraps its body in one `try/except` and
    returns `fail(logger, stage, exc)` on error.
-2. Register the nodes and edges in `workflow.build_graph()`, reusing
-   `route_on_error`, and merge the message table into
-   `workflow.CUSTOMER_MESSAGES`.
+2. Register the nodes and edges in the graph it belongs to: the host graph in
+   `workflow.build_graph()`, or the in-container graph in
+   `eager_check.build_graph()`. Reuse `route_on_error`, and merge the message
+   table into `workflow.CUSTOMER_MESSAGES`, which is where every stage from
+   either graph is looked up.
 3. Add its scenarios to the parametrized tables in `tests/test_eager_check.py`
    before writing the nodes.

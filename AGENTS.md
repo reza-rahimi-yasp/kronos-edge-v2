@@ -5,8 +5,9 @@ Instructions for AI coding agents working in this repository.
 ## What this repo is
 
 A LangGraph state machine that validates a user's `config.yaml` against the
-supported environments, then checks whether their PyTorch `model.py` runs in
-eager mode with the inputs in their `input.npz`. `README.md` has the
+supported environments, then runs their PyTorch `model.py` with the inputs in
+their `input.npz` in eager mode on the GPU, inside that environment's Docker
+container. `README.md` has the
 user-facing contract and how to run it. `architecture.md` has the state
 diagram, the component list, the failure stages, and how to add a check.
 
@@ -20,10 +21,11 @@ diagram, the component list, the failure stages, and how to add a check.
 | `src/kronos_edge/environments.yaml` | Registry of supported environments. One entry today. Must agree with its Dockerfile. |
 | `src/kronos_edge/env_check.py` | The environment check nodes, their `CUSTOMER_MESSAGES`, and the `docker` and `nvidia-smi` probes. |
 | `docker/<name>/Dockerfile` | One per registry entry, pinning the entry's CUDA, TensorRT, and torch versions. `.dockerignore` keeps `.venv` out of the build context. |
-| `src/kronos_edge/eager_check.py` | The eager check nodes, `InvalidUserInputs`, and its `CUSTOMER_MESSAGES`. |
-| `src/kronos_edge/workflow.py` | Graph assembly, `success` and `failure` nodes, `run_check()`, CLI `main()`. |
+| `src/kronos_edge/container.py` | The `run_in_container` host node and the `docker run` probe. |
+| `src/kronos_edge/eager_check.py` | The eager check nodes, `InvalidUserInputs`, its `CUSTOMER_MESSAGES`, its sub-graph, and the `main()` that runs inside the container and prints a JSON report. |
+| `src/kronos_edge/workflow.py` | Host graph assembly, `success` and `failure` nodes, `run_check()`, CLI `main()`. |
 | `tests/conftest.py` | Shared fixtures. Autouse patches replace `env_check.image_exists` and `env_check.host_gpu`, so tests never shell out. |
-| `tests/test_env_check.py`, `tests/test_eager_check.py` | All tests. Fixtures are source strings written to `tmp_path`; nothing binary is committed. |
+| `tests/test_container.py`, `tests/test_env_check.py`, `tests/test_eager_check.py` | All tests. Fixtures are source strings written to `tmp_path`; nothing binary is committed. |
 | `pyproject.toml` | Runtime deps, a `dev` dependency group with pytest, and `pythonpath = ["src"]` for pytest. No build system. |
 | `requirements.txt` | Pinned runtime deps, kept in sync with `pyproject.toml`. |
 
@@ -51,6 +53,9 @@ A gitignored `.venv` is expected at the repo root. Do not add lockfiles.
   versions. Change all three together.
 - Anything that shells out (`docker`, `nvidia-smi`) is a module-level function
   so tests can replace it with `monkeypatch`.
+- The container talks to the host only through the one-line JSON report from
+  `eager_check.report()`. Its logs go to stderr, which the host inherits.
+- Rebuild the image after changing anything under `src/`; it is copied in.
 - Tests come first: add the scenario to the parametrized table, see it fail,
   then implement.
 - Branch off `main`, one PR per concern, commits that each do one thing.
