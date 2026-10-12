@@ -2,6 +2,48 @@
 
 Instructions for AI coding agents working in this repository.
 
+## What this repo is
+
+A LangGraph state machine that checks whether a user's PyTorch `model.py`
+runs in eager mode with the inputs in their `input.npz`. `README.md` has the
+user-facing contract and how to run it. `architecture.md` has the state
+diagram, the component list, the failure stages, and how to add a check.
+
+## Repository map
+
+| Path | What lives there |
+|---|---|
+| `src/kronos_edge/log.py` | Logging wrapper. `TRACE` level, `configure()`, `get_logger()`, and the `stage` record field. |
+| `src/kronos_edge/state.py` | Shared `State`, `route_on_error()`, `fail()`. Must not import the other two modules. |
+| `src/kronos_edge/eager_check.py` | The eager check nodes, `InvalidUserInputs`, and its `CUSTOMER_MESSAGES`. |
+| `src/kronos_edge/workflow.py` | Graph assembly, `success` and `failure` nodes, `run_check()`, CLI `main()`. |
+| `tests/test_eager_check.py` | All tests. Fixtures are source strings written to `tmp_path`; nothing binary is committed. |
+| `pyproject.toml` | Runtime deps, a `dev` dependency group with pytest, and `pythonpath = ["src"]` for pytest. No build system. |
+| `requirements.txt` | Pinned runtime deps, kept in sync with `pyproject.toml`. |
+
+## Running things
+
+```bash
+.venv/bin/pytest                                  # all tests
+PYTHONPATH=src .venv/bin/python -m kronos_edge.workflow model.py input.npz
+```
+
+A gitignored `.venv` is expected at the repo root. Do not add lockfiles.
+
+## Conventions in this code
+
+- Every node wraps its body in one `try/except Exception` and returns
+  `fail(logger, stage, exc)` on error. Exceptions never escape a node.
+- Failure details travel in state (`error`, `error_detail`), never in a shared
+  log buffer. Logs are for operators; state is for the workflow.
+- Log through `kronos_edge.log.get_logger` and tag records with
+  `extra={"stage": ...}`. A module that can run under `python -m` must name
+  its logger explicitly, because `__name__` becomes `__main__` there.
+- Customer-facing text lives only in `CUSTOMER_MESSAGES` tables, keyed by stage.
+- Tests come first: add the scenario to the parametrized table, see it fail,
+  then implement.
+- Branch off `main`, one PR per concern, commits that each do one thing.
+
 ## Scope
 
 - Work only inside this repository. Do not read, reference, or borrow code from
@@ -28,6 +70,9 @@ Instructions for AI coding agents working in this repository.
 
 ## Before finishing
 
+- Run the tests and report the result verbatim.
 - Verify the change does what was asked and nothing more.
+- Update `README.md`, `architecture.md`, or this file when the change alters
+  the user contract, a component, or a convention described there.
 - Report exactly what was changed, what was not done, and anything that still
   needs the user's input.
