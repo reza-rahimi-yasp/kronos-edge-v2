@@ -7,20 +7,25 @@ input.npz holds one array per reference input under ``arr_0 .. arr_n-1``,
 which is what ``np.savez("input.npz", *arrays)`` writes.
 """
 
+import argparse
 import importlib.util
 import inspect
+import json
 
 import numpy as np
 import torch
+from langgraph.graph import END, START, StateGraph
 
-from kronos_edge.log import get_logger
-from kronos_edge.state import State, fail
+from kronos_edge.log import PACKAGE_LOGGER, configure, get_logger
+from kronos_edge.state import State, fail, route_on_error
 
-logger = get_logger(__name__)
+# Explicit name: this module runs under ``python -m`` inside the container.
+logger = get_logger(f"{PACKAGE_LOGGER}.eager_check")
 
 INPUT_NAMES = ("get_inputs", "get_fwd_args")
 
 CUSTOMER_MESSAGES = {
+    "select_device": "The GPU could not be accessed inside the environment container. Contact support.",
     "import_module": "model.py could not be loaded.",
     "find_model_class": "model.py does not define a 'Model' class.",
     "find_get_inputs": "model.py does not define get_inputs() or get_fwd_args().",
@@ -56,8 +61,14 @@ def _required_init_args(model_cls: type) -> list[str]:
 
 
 def load_model(state: State) -> State:
-    stage = "import_module"
+    stage = "select_device"
     try:
+        device = state.get("device", "cpu")
+        if device.startswith("cuda") and not torch.cuda.is_available():
+            raise RuntimeError(f"device {device} requested but torch.cuda.is_available() is False")
+        logger.info("device %s", device, extra={"stage": stage})
+
+        stage = "import_module"
         logger.info("loading %s", state["model_path"], extra={"stage": stage})
         module = _import_module(state["model_path"])
 
@@ -82,7 +93,7 @@ def load_model(state: State) -> State:
                     "but model.py does not define get_init_inputs()"
                 )
             init_inputs = ()
-        model = model_cls(*init_inputs).eval()
+        model = model_cls(*init_inputs).eval().to(device)
     except Exception as exc:
         return fail(logger, stage, exc)
     return {"model": model, "get_inputs": get_inputs}
@@ -110,7 +121,7 @@ def validate_inputs(state: State) -> State:
                     f"{key}: expected shape {tuple(ref.shape)} dtype {ref.dtype}, "
                     f"found shape {tuple(tensor.shape)} dtype {tensor.dtype}"
                 )
-            user_inputs.append(tensor)
+            user_inputs.append(tensor.to(state.get("device", "cpu")))
     except Exception as exc:
         return fail(logger, stage, exc)
     return {"user_inputs": tuple(user_inputs)}
@@ -125,3 +136,41 @@ def run_eager(state: State) -> State:
     except Exception as exc:
         return fail(logger, stage, exc)
     return {}
+
+
+def build_graph():
+    graph = StateGraph(State)
+    graph.add_node("load_model", load_model)
+    graph.add_node("validate_inputs", validate_inputs)
+    graph.add_node("run_eager", run_eager)
+    graph.add_edge(START, "load_model")
+    graph.add_conditional_edges("load_model", route_on_error, {"ok": "validate_inputs", "failure": END})
+    graph.add_conditional_edges("validate_inputs", route_on_error, {"ok": "run_eager", "failure": END})
+    graph.add_edge("run_eager", END)
+    return graph.compile()
+
+
+def run(model_path, npz_path, device: str = "cpu") -> State:
+    return build_graph().invoke({"model_path": str(model_path), "npz_path": str(npz_path), "device": device})
+
+
+def report(state: State) -> str:
+    """One JSON line the host parses: the failure stage and detail, or no error."""
+    return json.dumps({"error": state.get("error"), "error_detail": state.get("error_detail", "")})
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="Run the eager check and print a JSON report.")
+    parser.add_argument("model_path")
+    parser.add_argument("npz_path")
+    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--log-level", default="INFO")
+    args = parser.parse_args(argv)
+    configure(args.log_level)
+    state = run(args.model_path, args.npz_path, device=args.device)
+    print(report(state))
+    return 0 if state.get("error") is None else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -19,6 +19,8 @@ class State(TypedDict, total=False):
     model: torch.nn.Module
     get_inputs: Callable[[], object]
     user_inputs: tuple[torch.Tensor, ...]
+    device: str
+    log_level: str
     error: str | None
     error_detail: str
     outcome: str
