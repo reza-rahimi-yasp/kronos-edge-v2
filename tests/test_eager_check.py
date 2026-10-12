@@ -105,6 +105,11 @@ def error_records(caplog):
     return [r for r in caplog.records if r.levelno >= logging.ERROR and r.name.startswith("kronos_edge")]
 
 
+def run(env_files, model, npz):
+    config, environments = env_files
+    return run_check(config, model, npz, environments_path=environments)
+
+
 @pytest.mark.parametrize(
     "source, arrays",
     [
@@ -114,8 +119,8 @@ def error_records(caplog):
         pytest.param(TWO_INPUTS, XY, id="two_inputs"),
     ],
 )
-def test_success(tmp_path, caplog, source, arrays):
-    state = run_check(write_model(tmp_path, source), write_npz(tmp_path, arrays))
+def test_success(tmp_path, caplog, env_files, source, arrays):
+    state = run(env_files, write_model(tmp_path, source), write_npz(tmp_path, arrays))
 
     assert state["outcome"] == "success"
     assert state.get("error") is None
@@ -141,8 +146,8 @@ def test_success(tmp_path, caplog, source, arrays):
         pytest.param(CONV_RELU, [np.zeros((1, 3, 8, 8), dtype=np.float64)], "validate_inputs", "dtype", id="dtype_mismatch"),
     ],
 )
-def test_failure(tmp_path, caplog, source, arrays, stage, fragment):
-    state = run_check(write_model(tmp_path, source), write_npz(tmp_path, arrays))
+def test_failure(tmp_path, caplog, env_files, source, arrays, stage, fragment):
+    state = run(env_files, write_model(tmp_path, source), write_npz(tmp_path, arrays))
 
     assert state["outcome"] == "failure"
     assert state["error"] == stage
@@ -152,20 +157,20 @@ def test_failure(tmp_path, caplog, source, arrays, stage, fragment):
     assert records[0].stage == stage
 
 
-def test_forward_failure_includes_exception_text(tmp_path):
-    state = run_check(write_model(tmp_path, TYPO), write_npz(tmp_path, [X]))
+def test_forward_failure_includes_exception_text(tmp_path, env_files):
+    state = run(env_files, write_model(tmp_path, TYPO), write_npz(tmp_path, [X]))
 
     assert "relo" in state["customer_message"]
 
 
-def test_init_inputs_missing_names_required_arguments(tmp_path):
-    state = run_check(write_model(tmp_path, INIT_INPUTS_MISSING), write_npz(tmp_path, [X]))
+def test_init_inputs_missing_names_required_arguments(tmp_path, env_files):
+    state = run(env_files, write_model(tmp_path, INIT_INPUTS_MISSING), write_npz(tmp_path, [X]))
 
     assert "in_channels" in state["customer_message"]
     assert "out_channels" in state["customer_message"]
 
 
-def test_concurrent_runs_do_not_share_failure_details(tmp_path):
+def test_concurrent_runs_do_not_share_failure_details(tmp_path, env_files):
     typo_dir, no_model_dir = tmp_path / "typo", tmp_path / "no_model"
     typo_dir.mkdir()
     no_model_dir.mkdir()
@@ -175,7 +180,7 @@ def test_concurrent_runs_do_not_share_failure_details(tmp_path):
     ]
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        typo_state, no_model_state = list(pool.map(lambda job: run_check(*job), jobs))
+        typo_state, no_model_state = list(pool.map(lambda job: run(env_files, *job), jobs))
 
     assert typo_state["error"] == "forward"
     assert "relo" in typo_state["customer_message"]
@@ -188,15 +193,20 @@ def test_route_on_error():
     assert route_on_error({}) == "ok"
 
 
-def test_main_success_exit_code(tmp_path, capsys):
-    code = main([str(write_model(tmp_path, CONV_RELU)), str(write_npz(tmp_path, [X]))])
+def cli_args(env_files, model, npz):
+    config, environments = env_files
+    return [str(config), str(model), str(npz), "--environments", str(environments)]
+
+
+def test_main_success_exit_code(tmp_path, env_files, capsys):
+    code = main(cli_args(env_files, write_model(tmp_path, CONV_RELU), write_npz(tmp_path, [X])))
 
     assert code == 0
     assert "succeeded" in capsys.readouterr().out
 
 
-def test_main_failure_exit_code(tmp_path, capsys):
-    code = main([str(write_model(tmp_path, TYPO)), str(write_npz(tmp_path, [X]))])
+def test_main_failure_exit_code(tmp_path, env_files, capsys):
+    code = main(cli_args(env_files, write_model(tmp_path, TYPO), write_npz(tmp_path, [X])))
 
     assert code == 1
     assert "cannot be run through eager mode" in capsys.readouterr().out
