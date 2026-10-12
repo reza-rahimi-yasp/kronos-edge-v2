@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import yaml
 
-from kronos_edge import env_check
+from kronos_edge import container, eager_check, env_check
 
 ENVIRONMENT = {
     "gpu": "NVIDIA GeForce RTX 5090",
@@ -62,6 +62,16 @@ def host_matches_registry(monkeypatch):
     """Tests never touch docker or nvidia-smi; the host looks like the registry entry."""
     monkeypatch.setattr(env_check, "image_exists", lambda image: True)
     monkeypatch.setattr(env_check, "host_gpu", lambda: (ENVIRONMENT["gpu"], ENVIRONMENT["driver"]))
+
+
+@pytest.fixture(autouse=True)
+def eager_check_runs_in_process(monkeypatch):
+    """Stand in for `docker run`: run the eager sub-graph here, on CPU, and return its JSON report."""
+
+    def fake_run_container(image, model_path, npz_path, device, log_level):
+        return eager_check.report(eager_check.run(model_path, npz_path, device="cpu"))
+
+    monkeypatch.setattr(container, "run_container", fake_run_container)
 
 
 @pytest.fixture
