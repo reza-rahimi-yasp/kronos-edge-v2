@@ -6,8 +6,14 @@ from typing import TypedDict
 
 import torch
 
+from kronos_edge.config import Environment, EnvironmentConfig
+
 
 class State(TypedDict, total=False):
+    config_path: str
+    environments_path: str
+    config: EnvironmentConfig
+    environment: Environment
     model_path: str
     npz_path: str
     model: torch.nn.Module
