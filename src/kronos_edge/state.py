@@ -2,9 +2,7 @@
 
 import logging
 from collections.abc import Callable
-from typing import TypedDict
-
-import torch
+from typing import Any, TypedDict
 
 from kronos_edge.config import Environment, EnvironmentConfig
 
@@ -16,9 +14,9 @@ class State(TypedDict, total=False):
     environment: Environment
     model_path: str
     npz_path: str
-    model: torch.nn.Module
+    model: Any
     get_inputs: Callable[[], object]
-    user_inputs: tuple[torch.Tensor, ...]
+    user_inputs: tuple[Any, ...]
     device: str
     log_level: str
     error: str | None

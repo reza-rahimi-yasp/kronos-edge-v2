@@ -17,6 +17,7 @@ import torch
 from langgraph.graph import END, START, StateGraph
 
 from kronos_edge.log import PACKAGE_LOGGER, configure, get_logger
+from kronos_edge.messages import EAGER as CUSTOMER_MESSAGES
 from kronos_edge.state import State, fail, route_on_error
 
 # Explicit name: this module runs under ``python -m`` inside the container.
@@ -24,17 +25,6 @@ logger = get_logger(f"{PACKAGE_LOGGER}.eager_check")
 
 INPUT_NAMES = ("get_inputs", "get_fwd_args")
 
-CUSTOMER_MESSAGES = {
-    "select_device": "The GPU could not be accessed inside the environment container. Contact support.",
-    "import_module": "model.py could not be loaded.",
-    "find_model_class": "model.py does not define a 'Model' class.",
-    "find_get_inputs": "model.py does not define get_inputs() or get_fwd_args().",
-    "init_model": "Model could not be constructed.",
-    "get_inputs": "get_inputs() raised an exception.",
-    "load_npz": "input.npz could not be read.",
-    "validate_inputs": "input.npz does not match the inputs returned by get_inputs().",
-    "forward": "Your model cannot be run through eager mode. Either fix it or contact support.",
-}
 
 
 class InvalidUserInputs(ValueError):

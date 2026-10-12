@@ -16,16 +16,17 @@ diagram, the component list, the failure stages, and how to add a check.
 | Path | What lives there |
 |---|---|
 | `src/kronos_edge/log.py` | Logging wrapper. `TRACE` level, `configure()`, `get_logger()`, and the `stage` record field. |
-| `src/kronos_edge/state.py` | Shared `State`, `route_on_error()`, `fail()`. Must not import the other two modules. |
+| `src/kronos_edge/messages.py` | Every customer-facing message, keyed by stage, grouped per check, merged with duplicate detection. No heavy imports. |
+| `src/kronos_edge/state.py` | Shared `State`, `route_on_error()`, `fail()`. No torch import; model fields are typed `Any`. |
 | `src/kronos_edge/config.py` | Pydantic schema for `config.yaml` and the registry; `parse_config()`, `load_environments()`. |
 | `src/kronos_edge/environments.yaml` | Registry of supported environments. One entry today. Must agree with its Dockerfile. |
-| `src/kronos_edge/env_check.py` | The environment check nodes, their `CUSTOMER_MESSAGES`, and the `docker` and `nvidia-smi` probes. |
+| `src/kronos_edge/env_check.py` | The environment check nodes and the `docker` and `nvidia-smi` probes. |
 | `docker/<name>/Dockerfile` | One per registry entry, pinning the entry's CUDA, TensorRT, and torch versions. `.dockerignore` keeps `.venv` out of the build context. |
 | `src/kronos_edge/container.py` | The `run_in_container` host node and the `docker run` probe. |
-| `src/kronos_edge/eager_check.py` | The eager check nodes, `InvalidUserInputs`, its `CUSTOMER_MESSAGES`, its sub-graph, and the `main()` that runs inside the container and writes the JSON report. |
+| `src/kronos_edge/eager_check.py` | The eager check nodes, `InvalidUserInputs`, its sub-graph, and the `main()` that runs inside the container and writes the JSON report. The only host-side module that imports torch, and the host never imports it. |
 | `src/kronos_edge/workflow.py` | Host graph assembly, `success` and `failure` nodes, `run_check()`, CLI `main()`. |
 | `tests/conftest.py` | Shared fixtures. Autouse patches replace `env_check.image_exists` and `env_check.host_gpu`, so tests never shell out. |
-| `tests/test_container.py`, `tests/test_env_check.py`, `tests/test_eager_check.py` | All tests. Fixtures are source strings written to `tmp_path`; nothing binary is committed. |
+| `tests/test_messages.py`, `tests/test_container.py`, `tests/test_env_check.py`, `tests/test_eager_check.py` | All tests. Fixtures are source strings written to `tmp_path`; nothing binary is committed. |
 | `pyproject.toml` | Runtime deps, a `dev` dependency group with pytest, and `pythonpath = ["src"]` for pytest. No build system. |
 | `requirements.txt` | Pinned runtime deps, kept in sync with `pyproject.toml`. |
 
@@ -48,7 +49,13 @@ A gitignored `.venv` is expected at the repo root. Do not add lockfiles.
 - Log through `kronos_edge.log.get_logger` and tag records with
   `extra={"stage": ...}`. A module that can run under `python -m` must name
   its logger explicitly, because `__name__` becomes `__main__` there.
-- Customer-facing text lives only in `CUSTOMER_MESSAGES` tables, keyed by stage.
+- Customer-facing text lives only in `messages.py`, one table per check,
+  keyed by stage. Stage names are one flat namespace across all checks;
+  `messages.merge()` and a test reject duplicates, and every `stage = "..."`
+  in a check must have an entry.
+- The host (`workflow`, `container`, `env_check`, `state`, `config`, `log`,
+  `messages`) must import without torch or numpy. A test enforces it. Only
+  `eager_check` may import the model stack, and only the container runs it.
 - A registry entry, its Dockerfile, and the image labels must state the same
   versions. Change all three together.
 - Anything that shells out (`docker`, `nvidia-smi`) is a module-level function
