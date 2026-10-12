@@ -14,9 +14,13 @@ class State(TypedDict, total=False):
     environment: Environment
     model_path: str
     npz_path: str
+    artifacts_path: str
+    artifacts_dir: str
     model: Any
     get_inputs: Callable[[], object]
     user_inputs: tuple[Any, ...]
+    onnx_model: Any
+    simplified_onnx: Any
     device: str
     log_level: str
     error: str | None

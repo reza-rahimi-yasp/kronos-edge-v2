@@ -2,10 +2,12 @@
 
 from pathlib import Path
 
+import onnx
 import pytest
 import torch
 
-from kronos_edge import container, onnx_check
+from kronos_edge import container, eager_check, onnx_check
+from kronos_edge.workflow import run_check
 from test_eager_check import CONV_RELU, X, error_records, run, write_model, write_npz
 
 # Runs in eager mode but torch.export cannot trace the data-dependent branch.
@@ -95,8 +97,7 @@ def test_missing_exporter_is_a_support_failure(tmp_path, monkeypatch, env_files)
     assert "onnxscript" in state["customer_message"]
 
 
-def test_export_is_run_in_memory_and_writes_no_onnx_file(tmp_path, monkeypatch, env_files):
-    monkeypatch.chdir(tmp_path)
+def test_export_is_written_to_the_artifact_directory(tmp_path, monkeypatch, env_files):
     calls = []
     real_export = onnx_check.export
 
@@ -115,7 +116,8 @@ def test_export_is_run_in_memory_and_writes_no_onnx_file(tmp_path, monkeypatch, 
     assert isinstance(model, torch.nn.Module)
     assert len(inputs) == 1 and tuple(inputs[0].shape) == X.shape
     assert isinstance(program, torch.onnx.ONNXProgram)
-    assert onnx_files(tmp_path) == []
+    assert (tmp_path / ".artifact" / "model.onnx").is_file()
+    onnx.checker.check_model(onnx.load(tmp_path / ".artifact" / "model.onnx"))
 
 
 def test_report_directory_holds_only_the_report(tmp_path, monkeypatch, env_files):
@@ -123,8 +125,8 @@ def test_report_directory_holds_only_the_report(tmp_path, monkeypatch, env_files
     seen = {}
     real_run_container = container.run_container
 
-    def spying_run_container(image, model_path, npz_path, report_dir, device, log_level):
-        code = real_run_container(image, model_path, npz_path, report_dir, device, log_level)
+    def spying_run_container(image, model_path, npz_path, report_dir, artifacts_dir, device, log_level):
+        code = real_run_container(image, model_path, npz_path, report_dir, artifacts_dir, device, log_level)
         seen["files"] = sorted(f.name for f in Path(report_dir).iterdir())
         return code
 
@@ -136,10 +138,27 @@ def test_report_directory_holds_only_the_report(tmp_path, monkeypatch, env_files
     assert seen["files"] == [container.REPORT_FILE]
 
 
-def test_failed_export_writes_no_onnx_file(tmp_path, monkeypatch, env_files):
-    monkeypatch.chdir(tmp_path)
-
+def test_failed_export_writes_no_onnx_file(tmp_path, env_files):
     state = run(env_files, write_model(tmp_path, UNSUPPORTED_OP), write_npz(tmp_path, [X]))
 
     assert state["error"] == "onnx_convert"
     assert onnx_files(tmp_path) == []
+
+
+def test_unwritable_artifact_directory_is_its_own_stage(tmp_path, env_files):
+    config, environments = env_files
+    (tmp_path / "blocked").write_text("not a directory")
+
+    state = run_check(config, write_model(tmp_path, CONV_RELU), write_npz(tmp_path, [X]),
+                      environments_path=environments, artifacts_path=tmp_path / "blocked")
+
+    assert state["outcome"] == "failure"
+    assert state["error"] == "container_run"
+    assert "blocked" in state["customer_message"]
+
+
+def test_export_kept_in_state_for_the_next_node(good_model, artifacts):
+    state = eager_check.run(*good_model, artifacts, device="cpu")
+
+    assert state.get("error") is None
+    assert isinstance(state["onnx_model"], onnx.ModelProto)

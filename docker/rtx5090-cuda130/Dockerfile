@@ -14,7 +14,7 @@ RUN python3 -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 
 RUN pip install --no-cache-dir "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cu130 \
-    && pip install --no-cache-dir "tensorrt-cu13==${TENSORRT_VERSION}" langgraph numpy "onnx==1.23.2" "onnxscript==0.7.2" pyyaml pydantic
+    && pip install --no-cache-dir "tensorrt-cu13==${TENSORRT_VERSION}" langgraph numpy "onnx==1.23.2" "onnxscript==0.7.2" "onnxsim==0.8.1" pyyaml pydantic
 
 COPY src /opt/kronos-edge/src
 ENV PYTHONPATH=/opt/kronos-edge/src

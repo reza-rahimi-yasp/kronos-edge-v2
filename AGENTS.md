@@ -9,8 +9,8 @@ decisions: do not add file listings, commands, or summaries here.
 - Two LangGraph graphs: the host graph validates config and environment, the
   container graph runs the model. The host never runs user code.
 - The host must import without torch or numpy. Only the container graph's
-  modules (`eager_check`, `onnx_check`) import the model stack. A test
-  enforces it.
+  modules (`eager_check`, `onnx_check`, `onnxsim_check`) import the model
+  stack. A test enforces it.
 - Customer-facing text lives only in `messages.py`, one table per check,
   keyed by stage. Stage names are one flat namespace across all checks;
   `messages.merge()` and a test reject duplicates, and every `stage = "..."`
@@ -20,8 +20,12 @@ decisions: do not add file listings, commands, or summaries here.
 - The container talks to the host only through `report.json` in the mounted
   report directory. Never through stdout: the user's model owns stdout. Logs
   go to stderr, which the host inherits.
-- The ONNX export is a check, not an output: it runs in memory and no `.onnx`
-  file is written.
+- Files produced for the user (`.onnx`, later `.engine`) go only to the
+  artifact directory: `.artifact` in the working directory unless
+  `--artifacts` says otherwise, created by the host and mounted into the
+  container. Each node writes its own file as soon as it has it, so a later
+  failure keeps the earlier files. Intermediate models also stay in state in
+  memory for the next node.
 
 ## Node conventions
 
