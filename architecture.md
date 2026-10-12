@@ -32,7 +32,9 @@ stateDiagram-v2
         export_onnx --> report : error
         simplify_onnx --> build_engine : ok
         simplify_onnx --> report : error
-        build_engine --> report
+        build_engine --> benchmark : ok
+        build_engine --> report : error
+        benchmark --> report
         report --> [*]
     }
 ```
@@ -44,7 +46,8 @@ Every node either advances the state or records a failure stage in
 
 - `load_config` (`env_check.py`): reads and validates the user's `config.yaml`
   against the Pydantic schema in `config.py`: the five environment fields plus
-  the `precision` setting. Stages: `read_config`, `validate_config`.
+  the `precision`, `metric`, and `threshold` settings. Stages: `read_config`,
+  `validate_config`.
 - `match_environment` (`env_check.py`): loads `environments.yaml`, finds the
   entry equal to the config on the five environment fields, and checks the host GPU via
   `nvidia-smi` and the image via `docker image inspect`. Stages:
@@ -57,12 +60,13 @@ Every node either advances the state or records a failure stage in
   to agree with it. Stage: `container_run`; a
   failure reported by the container is passed through under its own stage.
 - `success` / `failure` (`workflow.py`): set `outcome` and the
-  `customer_message`, looked up by stage in `messages.py`.
+  `customer_message`: the benchmark numbers on success, or the message looked
+  up by stage in `messages.py`.
 
 ## Container graph
 
 Run by `python -m kronos_edge.eager_check` with `--device cuda` and the
-`--precision` from the config.
+`--precision` and `--threshold` from the config.
 
 - `load_model` (`eager_check.py`): selects the device, imports `model.py`,
   finds `Model` and `get_inputs()` or `get_fwd_args()`, and constructs the
@@ -92,5 +96,5 @@ Run by `python -m kronos_edge.eager_check` with `--device cuda` and the
   engine, keeps the bytes in state, and writes `model.engine`. TensorRT's own log is forwarded to ours
   and its errors become the customer detail. Stages: `tensorrt_import`,
   `tensorrt_parse`, `tensorrt_build`, `engine_save`.
-- `report` (`eager_check.main`): writes `error` and `error_detail` to
-  `report.json` and exits 1 on error, 0 otherwise.
+- `report` (`eager_check.main`): writes `error`, `error_detail`, and the
+  `benchmark` to `report.json` and exits 1 on error, 0 otherwise.

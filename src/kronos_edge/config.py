@@ -23,6 +23,7 @@ class EnvironmentConfig(BaseModel):
 CONFIG_FIELDS = tuple(EnvironmentConfig.model_fields)
 
 PRECISIONS = ("fp32", "fp16")
+METRICS = ("cosine",)
 
 
 class Config(EnvironmentConfig):
@@ -33,6 +34,8 @@ class Config(EnvironmentConfig):
     """
 
     precision: Literal["fp32", "fp16"]
+    metric: Literal["cosine"]
+    threshold: Annotated[float, Field(strict=True, ge=0.0, le=1.0)]
 
 
 class Environment(EnvironmentConfig):

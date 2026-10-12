@@ -35,6 +35,26 @@ class TensorRTBuildError(RuntimeError):
     """The builder produced no engine; the message lists the errors TensorRT logged."""
 
 
+def forwarding_logger(trt, target):
+    """A TensorRT logger that routes to ``target`` and keeps TensorRT's errors for the customer detail."""
+
+    class Forwarding(trt.ILogger):
+        def __init__(self):
+            super().__init__()
+            self.errors: list[str] = []
+
+        def log(self, severity, msg):
+            if severity in (trt.ILogger.Severity.INTERNAL_ERROR, trt.ILogger.Severity.ERROR):
+                self.errors.append(msg)
+                target.error("tensorrt: %s", msg, extra={"stage": "tensorrt"})
+            elif severity == trt.ILogger.Severity.WARNING:
+                target.warning("tensorrt: %s", msg, extra={"stage": "tensorrt"})
+            else:
+                target.debug("tensorrt: %s", msg, extra={"stage": "tensorrt"})
+
+    return Forwarding()
+
+
 def build(onnx_path, inputs) -> bytes:
     """Parse the ONNX file into a strongly typed network and build a serialized engine.
 
@@ -44,23 +64,7 @@ def build(onnx_path, inputs) -> bytes:
     """
     import tensorrt as trt
 
-    class Forwarding(trt.ILogger):
-        """Route TensorRT's log to ours and keep its errors for the customer detail."""
-
-        def __init__(self):
-            super().__init__()
-            self.errors: list[str] = []
-
-        def log(self, severity, msg):
-            if severity in (trt.ILogger.Severity.INTERNAL_ERROR, trt.ILogger.Severity.ERROR):
-                self.errors.append(msg)
-                logger.error("tensorrt: %s", msg, extra={"stage": "tensorrt"})
-            elif severity == trt.ILogger.Severity.WARNING:
-                logger.warning("tensorrt: %s", msg, extra={"stage": "tensorrt"})
-            else:
-                logger.debug("tensorrt: %s", msg, extra={"stage": "tensorrt"})
-
-    log = Forwarding()
+    log = forwarding_logger(trt, logger)
     builder = trt.Builder(log)
     network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.STRONGLY_TYPED))
     parser = trt.OnnxParser(network, log)

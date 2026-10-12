@@ -7,9 +7,10 @@ config to a supported environment, then runs the check inside that
 environment's Docker container on the GPU: it loads the model, validates the
 inputs against the model's own reference inputs, runs one forward pass,
 exports the model to ONNX with the dynamo exporter, simplifies the ONNX with
-onnxsim, builds a TensorRT engine at the precision you ask for, and prints
-either a success line or a message saying what to fix. The ONNX files and the
-engine land in an artifact directory.
+onnxsim, builds a TensorRT engine at the precision you ask for, benchmarks
+the engine against eager mode, checks their outputs agree, and prints either
+the benchmark result or a message saying what to fix. The ONNX files, the
+engine, and the benchmark numbers land in an artifact directory.
 
 ## Requirements
 
@@ -29,10 +30,10 @@ a checkout. The examples below do that.
 
 ## Prepare your config file
 
-`config.yaml` names the environment you want and the precision of the
-TensorRT engine. All six fields are required, all values are strings, and no
-other fields are allowed. Version numbers must be quoted so YAML does not
-read them as numbers.
+`config.yaml` names the environment you want and the settings for the
+checks. All eight fields are required and no other fields are allowed.
+Version numbers must be quoted so YAML does not read them as numbers;
+`threshold` is a number.
 
 | Field | Type | Example |
 |---|---|---|
@@ -42,6 +43,8 @@ read them as numbers.
 | `tensorrt` | dotted version string | `"11.4.0"` |
 | `torch` | dotted version string | `"2.14.1"` |
 | `precision` | `fp32` or `fp16` | `fp16` |
+| `metric` | `cosine` | `cosine` |
+| `threshold` | number from 0 to 1 | `0.99` |
 
 The first five fields must match one supported environment exactly. The
 supported environments are listed in `src/kronos_edge/environments.yaml`.
@@ -63,6 +66,12 @@ integer inputs are left alone. The eager run always uses the model as you
 wrote it. TensorRT builds a strongly typed engine, so the engine
 computes in exactly the types the ONNX carries. Changing `precision` and
 running again rewrites all three files in the same artifact directory.
+
+`metric` names how the engine's outputs are compared with the eager outputs.
+Only cosine similarity is implemented, so only `cosine` is accepted.
+`threshold` is the minimum value every output must reach for the check to
+pass. Pick it for your model: `0.99` is a reasonable start for FP32, and FP16
+models may need a little slack.
 
 ## Prepare your model file
 
@@ -124,11 +133,21 @@ docker build -f docker/rtx5090-cuda130/Dockerfile -t kronos-edge:rtx5090-cuda130
 PYTHONPATH=src python -m kronos_edge.workflow path/to/config.yaml path/to/model.py path/to/input.npz
 ```
 
-On success it prints:
+On success it prints the benchmark, for example:
 
 ```
-Eager run, ONNX export, ONNX simplification, and TensorRT engine build (fp16) succeeded.
+Eager run, ONNX export, ONNX simplification, TensorRT engine build (fp16), and benchmark succeeded.
+Latency per run, eager: mean 0.047 ms, median 0.046 ms, p95 0.052 ms.
+Latency per run, TensorRT: mean 0.015 ms, median 0.015 ms, p95 0.017 ms.
+TensorRT is 3.0x faster than eager (median). Cosine similarity: 0.9998 (threshold 0.99).
 ```
+
+The benchmark warms each side up with 20 runs, then times 200 runs one by
+one and reports the mean, median, and 95th percentile of those latencies.
+The speedup is the ratio of the medians. Eager runs the model as you wrote
+it; TensorRT runs the engine at the configured precision. Each output of the
+model is compared with the engine's output at the same position by the
+configured metric, and every value is printed.
 
 The ONNX export runs `torch.onnx.export(..., dynamo=True)` on the same model
 and inputs the forward pass used, `onnxsim` simplifies the result, and
@@ -152,6 +171,7 @@ On a failure, the files produced before it are kept.
 | `model.onnx` | The ONNX export. |
 | `model_simplified.onnx` | The onnxsim simplification. |
 | `model.engine` | The serialized TensorRT engine, at the configured precision. Specific to this GPU and TensorRT version. |
+| `benchmark.json` | The latency statistics of both sides, the speedup, and the metric values, as printed. |
 
 When a model's weights exceed the 2 GB protobuf limit they are stored next to
 the `.onnx` file in a companion `.data` file of the same name, for example
@@ -203,6 +223,11 @@ and dtype of every input, `DEBUG` adds the full traceback of a failure.
 | TensorRT could not parse the ONNX model. Replace the operator or node named below or contact support. | The detail lists the parser's errors, typically an operator TensorRT has no importer for. |
 | TensorRT could not build an engine from the model. The errors it reported are below. | The detail lists what TensorRT logged, for example an unsupported layer configuration or running out of GPU memory. |
 | The TensorRT engine could not be written to the artifact directory. | Check the directory is writable; the detail shows the OS error. |
+| Your model failed while being run repeatedly in eager mode for timing. Either fix it or contact support. | The forward pass passed once but raised when repeated; the detail shows the exception. |
+| The TensorRT runtime is not available inside the environment container. Contact support. | The image lacks `tensorrt`. |
+| The TensorRT engine could not be loaded or run. The errors it reported are below. | The detail lists what TensorRT logged. |
+| The TensorRT engine's outputs do not have the same structure as the eager outputs. Contact support. | The count or a shape differs; the detail names the output. |
+| The TensorRT engine's outputs do not match the eager outputs within the threshold in config.yaml. | The detail names each output below the threshold with its value. Lower the threshold if the gap is acceptable for your model, or use `fp32`. |
 
 ## Run the tests
 

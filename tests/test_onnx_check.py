@@ -126,8 +126,10 @@ def test_report_directory_holds_only_the_report(tmp_path, monkeypatch, env_files
     seen = {}
     real_run_container = container.run_container
 
-    def spying_run_container(image, model_path, npz_path, report_dir, artifacts_dir, precision, device, log_level):
-        code = real_run_container(image, model_path, npz_path, report_dir, artifacts_dir, precision, device, log_level)
+    def spying_run_container(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level):
+        code = real_run_container(
+            image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level
+        )
         seen["files"] = sorted(f.name for f in Path(report_dir).iterdir())
         return code
 

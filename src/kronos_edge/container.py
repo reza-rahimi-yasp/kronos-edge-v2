@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict
 
 from kronos_edge import artifacts as artifact_files
 from kronos_edge.log import get_logger
-from kronos_edge.messages import CONTAINER as CUSTOMER_MESSAGES, EAGER, ONNX, ONNXSIM, TENSORRT
+from kronos_edge.messages import BENCHMARK, CONTAINER as CUSTOMER_MESSAGES, EAGER, ONNX, ONNXSIM, TENSORRT
 from kronos_edge.state import State, fail
 
 logger = get_logger(__name__)
@@ -23,15 +23,36 @@ REPORT_FILE = "report.json"
 
 
 
+class Latency(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mean: float
+    median: float
+    p95: float
+
+
+class Benchmark(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    eager_ms: Latency
+    tensorrt_ms: Latency
+    speedup: float
+    metric: str
+    threshold: float
+    values: list[float]
+
+
 class Report(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     error: str | None
     error_detail: str = ""
+    benchmark: Benchmark | None = None
 
 
 def build_command(
-    image: str, model_path, npz_path, report_dir, artifacts_dir, precision: str, device: str, log_level: str
+    image: str, model_path, npz_path, report_dir, artifacts_dir, precision: str, threshold: float, device: str,
+    log_level: str,
 ) -> list[str]:
     return [
         "docker", "run", "--rm", "--gpus", "all",
@@ -42,16 +63,17 @@ def build_command(
         image,
         "python", "-m", "kronos_edge.eager_check", "/work/model.py", "/work/input.npz",
         "--report", f"/work/out/{REPORT_FILE}", "--artifacts", "/work/artifact",
-        "--precision", precision, "--device", device, "--log-level", log_level,
+        "--precision", precision, "--threshold", str(threshold), "--device", device, "--log-level", log_level,
     ]
 
 
 def run_container(
-    image: str, model_path, npz_path, report_dir, artifacts_dir, precision: str, device: str, log_level: str
+    image: str, model_path, npz_path, report_dir, artifacts_dir, precision: str, threshold: float, device: str,
+    log_level: str,
 ) -> int:
     """Run the container with stdout and stderr inherited; return its exit code."""
     return subprocess.run(
-        build_command(image, model_path, npz_path, report_dir, artifacts_dir, precision, device, log_level)
+        build_command(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level)
     ).returncode
 
 
@@ -60,12 +82,14 @@ def _read_report(report_dir, code: int) -> Report:
     if not path.exists():
         raise RuntimeError(f"container exited {code} without writing a report")
     report = Report.model_validate_json(path.read_text())
-    if report.error is not None and report.error not in EAGER | ONNX | ONNXSIM | TENSORRT:
+    if report.error is not None and report.error not in EAGER | ONNX | ONNXSIM | TENSORRT | BENCHMARK:
         raise ValueError(f"report names unknown failure stage {report.error!r}")
     expected = 0 if report.error is None else 1
     if code != expected:
         reported = "no error" if report.error is None else f"error at {report.error}"
         raise RuntimeError(f"container exited {code} but reported {reported}")
+    if report.error is None and report.benchmark is None:
+        raise ValueError("report claims success but carries no benchmark")
     return report
 
 
@@ -76,14 +100,15 @@ def run_in_container(state: State) -> State:
         artifacts = Path(state["artifacts_path"])
         artifacts.mkdir(parents=True, exist_ok=True)
         artifact_files.clear(artifacts)
-        precision = state["config"].precision
+        config = state["config"]
         logger.info(
-            "running checks in %s on %s at %s, artifacts in %s", image, DEVICE, precision, artifacts, extra={"stage": stage}
+            "running checks in %s on %s at %s, artifacts in %s", image, DEVICE, config.precision, artifacts,
+            extra={"stage": stage},
         )
         with tempfile.TemporaryDirectory() as report_dir:
             code = run_container(
-                image, state["model_path"], state["npz_path"], report_dir, artifacts, precision, DEVICE,
-                state.get("log_level", "INFO"),
+                image, state["model_path"], state["npz_path"], report_dir, artifacts, config.precision,
+                config.threshold, DEVICE, state.get("log_level", "INFO"),
             )
             report = _read_report(report_dir, code)
     except Exception as exc:
@@ -91,4 +116,4 @@ def run_in_container(state: State) -> State:
     if report.error is not None:
         logger.info("container reported failure at stage %s", report.error, extra={"stage": stage})
         return {"error": report.error, "error_detail": report.error_detail}
-    return {}
+    return {"benchmark": report.benchmark.model_dump()}

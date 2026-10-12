@@ -18,14 +18,26 @@ DEFAULT_ENVIRONMENTS = Path(__file__).with_name("environments.yaml")
 DEFAULT_ARTIFACTS = Path(".artifact")
 
 
+def _latency(name: str, ms: dict) -> str:
+    return f"Latency per run, {name}: mean {ms['mean']:.3f} ms, median {ms['median']:.3f} ms, p95 {ms['p95']:.3f} ms."
+
+
 def success(state: State) -> State:
     precision = state["config"].precision
-    logger.info("all checks succeeded at %s", precision)
+    bench = state["benchmark"]
+    speedup = bench["speedup"]
+    comparison = f"{speedup:.1f}x faster" if speedup >= 1 else f"{1 / speedup:.1f}x slower"
+    values = ", ".join(f"{v:.4f}" for v in bench["values"])
+    logger.info("all checks succeeded at %s; speedup %.2fx", precision, speedup)
     return {
         "outcome": "success",
-        "customer_message": (
-            f"Eager run, ONNX export, ONNX simplification, and TensorRT engine build ({precision}) succeeded."
-        ),
+        "customer_message": "\n".join([
+            f"Eager run, ONNX export, ONNX simplification, TensorRT engine build ({precision}), and benchmark succeeded.",
+            _latency("eager", bench["eager_ms"]),
+            _latency("TensorRT", bench["tensorrt_ms"]),
+            f"TensorRT is {comparison} than eager (median). "
+            f"{bench['metric'].capitalize()} similarity: {values} (threshold {bench['threshold']}).",
+        ]),
     }
 
 

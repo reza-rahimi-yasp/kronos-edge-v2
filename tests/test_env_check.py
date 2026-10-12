@@ -16,16 +16,16 @@ def run(config, environments, good_model):
     return run_check(config, model, npz, environments_path=environments)
 
 
-@pytest.mark.parametrize("precision", ["fp32", "fp16"])
-def test_precision_is_accepted_and_ignored_by_matching(tmp_path, env_files, good_model, precision):
-    """The registry has no precision field; the config matches on the environment fields alone."""
+@pytest.mark.parametrize("setting, value", [("precision", "fp16"), ("metric", "cosine"), ("threshold", 0.5)])
+def test_settings_are_accepted_and_ignored_by_matching(tmp_path, env_files, good_model, setting, value):
+    """The registry has no settings; the config matches on the environment fields alone."""
     _, environments = env_files
-    config = write_yaml(tmp_path / "config.yaml", {**CONFIG, "precision": precision})
+    config = write_yaml(tmp_path / "config.yaml", {**CONFIG, setting: value})
 
     state = run(config, environments, good_model)
 
     assert state["outcome"] == "success"
-    assert state["config"].precision == precision
+    assert getattr(state["config"], setting) == value
     assert state["environment"].name == "rtx5090-cuda130"
 
 
@@ -70,6 +70,11 @@ def without(key):
         pytest.param(without("precision"), "precision", id="missing_precision"),
         pytest.param({**CONFIG, "precision": "int8"}, "fp16", id="unsupported_precision"),
         pytest.param({**CONFIG, "precision": "FP16"}, "fp16", id="precision_case_sensitive"),
+        pytest.param(without("metric"), "metric", id="missing_metric"),
+        pytest.param({**CONFIG, "metric": "mse"}, "cosine", id="unsupported_metric"),
+        pytest.param(without("threshold"), "threshold", id="missing_threshold"),
+        pytest.param({**CONFIG, "threshold": 1.5}, "threshold", id="threshold_above_one"),
+        pytest.param({**CONFIG, "threshold": "0.99"}, "threshold", id="threshold_not_a_number"),
         pytest.param({**CONFIG, "foo": "bar"}, "foo", id="extra_field"),
         pytest.param({**CONFIG, "cuda": 13.0}, "quoted", id="unquoted_version"),
         pytest.param({**CONFIG, "torch": "latest"}, "torch", id="bad_version_format"),

@@ -17,12 +17,14 @@ class State(TypedDict, total=False):
     artifacts_path: str
     artifacts_dir: str
     precision: str
+    threshold: float
     model: Any
     get_inputs: Callable[[], object]
     user_inputs: tuple[Any, ...]
     onnx_model: Any
     simplified_onnx: Any
     engine: bytes
+    benchmark: dict[str, Any]
     device: str
     log_level: str
     error: str | None
