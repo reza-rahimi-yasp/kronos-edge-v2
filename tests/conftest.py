@@ -5,7 +5,9 @@ import numpy as np
 import pytest
 import yaml
 
-from kronos_edge import container, eager_check, env_check, tensorrt_check
+import torch
+
+from kronos_edge import benchmark_check, container, eager_check, env_check, tensorrt_check
 
 ENVIRONMENT = {
     "gpu": "NVIDIA GeForce RTX 5090",
@@ -16,7 +18,7 @@ ENVIRONMENT = {
 }
 
 # config.yaml: the environment fields plus the check settings.
-CONFIG = {**ENVIRONMENT, "precision": "fp32"}
+CONFIG = {**ENVIRONMENT, "precision": "fp32", "metric": "cosine", "threshold": 0.99}
 
 REGISTRY = {
     "environments": [
@@ -78,8 +80,8 @@ def host_matches_registry(monkeypatch):
 def eager_check_runs_in_process(monkeypatch):
     """Stand in for `docker run`: run the eager sub-graph here, on CPU, write its report, return its exit code."""
 
-    def fake_run_container(image, model_path, npz_path, report_dir, artifacts_dir, precision, device, log_level):
-        state = eager_check.run(model_path, npz_path, artifacts_dir, precision=precision, device="cpu")
+    def fake_run_container(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level):
+        state = eager_check.run(model_path, npz_path, artifacts_dir, precision=precision, threshold=threshold, device="cpu")
         (Path(report_dir) / container.REPORT_FILE).write_text(eager_check.report(state))
         return 0 if state.get("error") is None else 1
 
@@ -98,6 +100,24 @@ def tensorrt_stub(monkeypatch):
     real_build = tensorrt_check.build
     monkeypatch.setattr(tensorrt_check, "build", lambda onnx_path, inputs: FAKE_ENGINE)
     return real_build
+
+
+class FakeEngineRunner:
+    """Stand in for a TensorRT engine: runs the eager model, optionally perturbing its outputs."""
+
+    def __init__(self, state, perturb=lambda outputs: outputs):
+        self.model, self.inputs, self.perturb = state["model"], state["user_inputs"], perturb
+        self.outputs = None
+
+    def run(self):
+        with torch.no_grad():  # like a real engine, never mutate the bound inputs
+            self.outputs = self.perturb(benchmark_check.flatten_outputs(self.model(*[t.clone() for t in self.inputs])))
+
+
+@pytest.fixture(autouse=True)
+def engine_runner_stub(monkeypatch):
+    """The engine only runs on the GPU in the image; here it is the eager model behind the runner interface."""
+    monkeypatch.setattr(benchmark_check, "load_engine", FakeEngineRunner)
 
 
 @pytest.fixture

@@ -9,6 +9,15 @@ import torch
 
 from conftest import GOOD_MODEL
 from kronos_edge import artifacts, container, eager_check, onnxsim_check
+
+BENCHMARK = {
+    "eager_ms": {"mean": 0.05, "median": 0.046, "p95": 0.06},
+    "tensorrt_ms": {"mean": 0.016, "median": 0.015, "p95": 0.02},
+    "speedup": 3.07,
+    "metric": "cosine",
+    "threshold": 0.99,
+    "values": [0.9998],
+}
 from kronos_edge.workflow import run_check
 
 TYPO_MODEL = GOOD_MODEL.replace("return self.conv(x)", "return self.convv(x)")
@@ -33,7 +42,7 @@ def run(env_files, good_model):
 def fake_container(monkeypatch, report=None, code=0):
     """Replace docker run with something that writes `report` (if given) and exits with `code`."""
 
-    def fake(image, model_path, npz_path, report_dir, artifacts_dir, precision, device, log_level):
+    def fake(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level):
         if report is not None:
             (Path(report_dir) / container.REPORT_FILE).write_text(report)
         return code
@@ -44,7 +53,7 @@ def fake_container(monkeypatch, report=None, code=0):
 def test_build_command_mounts_files_and_requests_gpu(tmp_path):
     model, npz, out, artifacts = tmp_path / "m.py", tmp_path / "i.npz", tmp_path / "out", tmp_path / ".artifact"
 
-    cmd = container.build_command("kronos-edge:x", model, npz, out, artifacts, "fp16", "cuda", "DEBUG")
+    cmd = container.build_command("kronos-edge:x", model, npz, out, artifacts, "fp16", 0.99, "cuda", "DEBUG")
 
     assert cmd[:3] == ["docker", "run", "--rm"]
     assert cmd[cmd.index("--gpus") + 1] == "all"
@@ -55,7 +64,7 @@ def test_build_command_mounts_files_and_requests_gpu(tmp_path):
     assert cmd[cmd.index("kronos-edge:x") + 1:] == [
         "python", "-m", "kronos_edge.eager_check", "/work/model.py", "/work/input.npz",
         "--report", "/work/out/report.json", "--artifacts", "/work/artifact",
-        "--precision", "fp16", "--device", "cuda", "--log-level", "DEBUG",
+        "--precision", "fp16", "--threshold", "0.99", "--device", "cuda", "--log-level", "DEBUG",
     ]
 
 
@@ -66,7 +75,7 @@ def test_rerun_clears_managed_files_but_keeps_the_users_own(monkeypatch, tmp_pat
     art = tmp_path / ".artifact"
     first = run_check(config, model, npz, environments_path=environments, artifacts_path=art)
     assert first["outcome"] == "success"
-    assert sorted(f.name for f in art.iterdir()) == ["model.engine", "model.onnx", "model_simplified.onnx"]
+    assert sorted(f.name for f in art.iterdir()) == ["benchmark.json", "model.engine", "model.onnx", "model_simplified.onnx"]
     (art / "notes.txt").write_text("mine")
     (art / "model.onnx.data").write_bytes(b"stale companion")
 
@@ -111,7 +120,7 @@ def test_missing_dependency_reaches_the_report(tmp_path, good_model, artifacts, 
         f"import sys; sys.modules[{blocked!r}] = None\n"
         "from kronos_edge.eager_check import main\n"
         f"sys.exit(main([{str(model)!r}, {str(npz)!r}, '--report', {str(report_path)!r}, "
-        f"'--artifacts', {str(artifacts)!r}, '--precision', 'fp32', '--device', 'cpu']))\n"
+        f"'--artifacts', {str(artifacts)!r}, '--precision', 'fp32', '--threshold', '0.99', '--device', 'cpu']))\n"
     )
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
 
@@ -126,9 +135,9 @@ def test_missing_dependency_reaches_the_report(tmp_path, good_model, artifacts, 
 def test_artifact_directory_is_created_before_the_container_runs(monkeypatch, tmp_path, env_files, good_model):
     seen = {}
 
-    def fake(image, model_path, npz_path, report_dir, artifacts_dir, precision, device, log_level):
+    def fake(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level):
         seen["exists"] = Path(artifacts_dir).is_dir()
-        (Path(report_dir) / container.REPORT_FILE).write_text('{"error": null}')
+        (Path(report_dir) / container.REPORT_FILE).write_text(json.dumps({"error": None, "benchmark": BENCHMARK}))
         return 0
 
     monkeypatch.setattr(container, "run_container", fake)
@@ -170,6 +179,9 @@ def test_docker_failure_is_reported(monkeypatch, caplog, env_files, good_model):
         pytest.param('{"error": null}', 137, id="success_report_but_killed"),
         pytest.param('{"error": "forward", "error_detail": "x"}', 0, id="failure_report_but_exit_zero"),
         pytest.param('{"error": "onnx_capture", "error_detail": "x"}', 0, id="onnx_failure_report_but_exit_zero"),
+        pytest.param('{"error": null, "benchmark": {"speedup": "fast"}}', 0, id="malformed_benchmark"),
+        pytest.param('{"error": null, "benchmark": null}', 0, id="success_without_benchmark"),
+        pytest.param(json.dumps({"error": None, "benchmark": {**BENCHMARK, "values": [float("nan")]}}), 0, id="nan_score_in_report"),
     ],
 )
 def test_invalid_reports_are_container_failures(monkeypatch, caplog, env_files, good_model, report, code):
@@ -205,9 +217,9 @@ def test_inner_failure_passes_through_without_a_host_error(monkeypatch, caplog, 
 def test_container_runs_on_cuda(monkeypatch, env_files, good_model):
     seen = {}
 
-    def record(image, model_path, npz_path, report_dir, artifacts_dir, precision, device, log_level):
-        seen.update(image=image, device=device, precision=precision)
-        state = eager_check.run(model_path, npz_path, artifacts_dir, precision=precision, device="cpu")
+    def record(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level):
+        seen.update(image=image, device=device, precision=precision, threshold=threshold)
+        state = eager_check.run(model_path, npz_path, artifacts_dir, precision=precision, threshold=threshold, device="cpu")
         (Path(report_dir) / container.REPORT_FILE).write_text(eager_check.report(state))
         return 0
 
@@ -216,7 +228,7 @@ def test_container_runs_on_cuda(monkeypatch, env_files, good_model):
     state = run(env_files, good_model)
 
     assert state["outcome"] == "success"
-    assert seen == {"image": "kronos-edge:rtx5090-cuda130", "device": "cuda", "precision": "fp32"}
+    assert seen == {"image": "kronos-edge:rtx5090-cuda130", "device": "cuda", "precision": "fp32", "threshold": 0.99}
 
 
 @pytest.mark.parametrize(
@@ -232,7 +244,7 @@ def test_eager_main_writes_json_report(tmp_path, good_model, artifacts, source, 
     model.write_text(source)
     report_path = tmp_path / "report.json"
 
-    exit_code = eager_check.main([str(model), str(npz), "--report", str(report_path), "--artifacts", str(artifacts), "--precision", "fp32", "--device", "cpu"])
+    exit_code = eager_check.main([str(model), str(npz), "--report", str(report_path), "--artifacts", str(artifacts), "--precision", "fp32", "--threshold", "0.99", "--device", "cpu"])
 
     report = json.loads(report_path.read_text())
     assert exit_code == code
@@ -253,19 +265,25 @@ def test_user_prints_do_not_corrupt_the_report(tmp_path, good_model, artifacts):
         "import sys\n"
         "from kronos_edge import tensorrt_check\n"
         "tensorrt_check.build = lambda onnx_path, inputs: b'fake engine'\n"
+        "from kronos_edge import benchmark_check\n"
+        "from conftest import FakeEngineRunner\n"
+        "benchmark_check.load_engine = FakeEngineRunner\n"
         "from kronos_edge.eager_check import main\n"
         f"sys.exit(main([{str(model)!r}, {str(npz)!r}, '--report', {str(report_path)!r}, "
-        f"'--artifacts', {str(artifacts)!r}, '--precision', 'fp32', '--device', 'cpu']))\n"
+        f"'--artifacts', {str(artifacts)!r}, '--precision', 'fp32', '--threshold', '0.99', '--device', 'cpu']))\n"
     )
-    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
+    tests_dir = str(Path(__file__).resolve().parent)
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(Path(__file__).resolve().parents[1] / "src"), tests_dir])}
 
     result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
 
     assert result.returncode == 0, result.stderr
     assert "loading without newline" in result.stdout and "bye from atexit" in result.stdout
-    assert json.loads(report_path.read_text()) == {"error": None, "error_detail": ""}
+    report = json.loads(report_path.read_text())
+    assert (report["error"], report["error_detail"]) == (None, "")
+    assert container.Report.model_validate(report).benchmark is not None
     assert "[torch.onnx]" not in result.stdout
-    assert sorted(f.name for f in artifacts.iterdir()) == ["model.engine", "model.onnx", "model_simplified.onnx"]
+    assert sorted(f.name for f in artifacts.iterdir()) == ["benchmark.json", "model.engine", "model.onnx", "model_simplified.onnx"]
 
 
 def test_cuda_unavailable_is_its_own_stage(monkeypatch, good_model, artifacts):

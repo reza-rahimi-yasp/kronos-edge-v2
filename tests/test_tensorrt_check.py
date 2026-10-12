@@ -36,7 +36,7 @@ def test_engine_is_built_from_the_simplified_model_and_named_in_the_message(tmp_
     state = run_with_precision(tmp_path, env_files, precision)
 
     assert state["outcome"] == "success"
-    assert f"TensorRT engine build ({precision}) succeeded" in state["customer_message"]
+    assert f"TensorRT engine build ({precision})" in state["customer_message"]
     assert seen["onnx_path"].name == "model_simplified.onnx" and seen["onnx_path"].is_file()
     assert [tuple(t.shape) for t in seen["inputs"]] == [X.shape]  # the user's inputs, for shape-input profiles
     assert (tmp_path / ".artifact" / "model.engine").read_bytes() == FAKE_ENGINE
@@ -90,7 +90,7 @@ def test_failure_stages(tmp_path, caplog, monkeypatch, env_files, build, stage, 
     assert state["error"] == stage
     assert fragment in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == [stage]
-    assert sorted(f.name for f in (tmp_path / ".artifact").iterdir()) == ["model.onnx", "model_simplified.onnx"]
+    assert sorted(f.name for f in (tmp_path / ".artifact").iterdir()) == ["model.onnx", "model_simplified.onnx"]  # no engine, no benchmark
 
 
 def test_missing_tensorrt_is_a_support_failure(monkeypatch, caplog, good_model, artifacts, tensorrt_stub):

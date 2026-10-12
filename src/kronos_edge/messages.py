@@ -64,4 +64,12 @@ TENSORRT = {
     "engine_save": "The TensorRT engine could not be written to the artifact directory.",
 }
 
-CUSTOMER_MESSAGES = merge(ENV, CONTAINER, EAGER, ONNX, ONNXSIM, TENSORRT)
+BENCHMARK = {
+    "benchmark_eager": "Your model failed while being run repeatedly in eager mode for timing. Either fix it or contact support.",
+    "benchmark_runtime": "The TensorRT runtime is not available inside the environment container. Contact support.",
+    "benchmark_engine": "The TensorRT engine could not be loaded or run. The errors it reported are below.",
+    "compare_outputs": "The TensorRT engine's outputs do not have the same structure as the eager outputs. Contact support.",
+    "accuracy": "The TensorRT engine's outputs do not match the eager outputs within the threshold in config.yaml.",
+}
+
+CUSTOMER_MESSAGES = merge(ENV, CONTAINER, EAGER, ONNX, ONNXSIM, TENSORRT, BENCHMARK)

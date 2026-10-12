@@ -9,13 +9,15 @@ decisions: do not add file listings, commands, or summaries here.
 - Two LangGraph graphs: the host graph validates config and environment, the
   container graph runs the model. The host never runs user code.
 - The host must import without torch or numpy. Only the container graph's
-  modules (`eager_check`, `onnx_check`, `onnxsim_check`, `tensorrt_check`)
-  import the model stack. A test enforces it.
+  modules (`eager_check`, `onnx_check`, `onnxsim_check`, `tensorrt_check`,
+  `benchmark_check`) import the model stack. A test enforces it.
 - `config.yaml` has two kinds of fields. The five environment fields must
-  equal a registry entry and select the image. Settings such as `precision`
-  are validated by the same schema but never take part in matching; changing
-  a setting re-runs the checks in the same environment and overwrites the
-  artifacts. `config.Config` is the environment schema plus the settings.
+  equal a registry entry and select the image. Settings (`precision`,
+  `metric`, `threshold`) are validated by the same schema but never take part
+  in matching; changing a setting re-runs the checks in the same environment
+  and overwrites the artifacts. `config.Config` is the environment schema plus
+  the settings. A metric is accepted only once it is implemented; the
+  threshold is the user's, never a constant in code.
 - Precision is applied once, at the ONNX export, by casting a copy of the
   model and its float inputs to the configured dtype for both `fp32` and
   `fp16`, whatever the user wrote the model in. TensorRT 11 has no precision
@@ -25,9 +27,28 @@ decisions: do not add file listings, commands, or summaries here.
   dimensions get an optimization profile pinned to the values and shapes in
   `input.npz`. Nothing is generalized beyond what the user supplied.
 - TensorRT exists only in the image. The real work is one module-level
-  function, `tensorrt_check.build`, that an autouse fixture stubs; tests cover
-  the node around it and the import failure, and the real parse and build
-  paths are verified by a GPU run before each merge.
+  function per node (`tensorrt_check.build`, `benchmark_check.load_engine`)
+  that an autouse fixture stubs; tests cover the node around it and the
+  import failure, and the real paths are verified by a GPU run before each
+  merge. The engine runner keeps the TensorRT `Runtime` alive for as long as
+  the engine and reads shape-tensor inputs from host memory; both are
+  segfaults otherwise. An output whose shape is still unknown after shape
+  inference (data-dependent, such as `nonzero`) gets a TensorRT output
+  allocator rather than a preallocated buffer.
+- The user's inputs in state are never mutated: every node that runs the
+  model runs it on copies, since a model may update its inputs in place, and
+  the benchmark compares eager and the engine on the original values.
+- Model outputs are flattened with pytree, which is what the exporter does,
+  so tuples, lists, and dicts (insertion order) pair up with the ONNX outputs
+  by position. A non-finite metric value fails the accuracy check; the host
+  rejects a report carrying one.
+- Benchmarks report a distribution, never a single number: warm up, time each
+  run, report mean, median, and p95 in ms for both sides, speedup as the
+  ratio of medians. Eager is timed as the user wrote the model; the engine at
+  the configured precision. Outputs are paired by position and every pair
+  must reach the threshold.
+- The container's success report must carry the benchmark; the host refuses
+  a success without one.
 - Customer-facing text lives only in `messages.py`, one table per check,
   keyed by stage. Stage names are one flat namespace across all checks;
   `messages.merge()` and a test reject duplicates, and every `stage = "..."`

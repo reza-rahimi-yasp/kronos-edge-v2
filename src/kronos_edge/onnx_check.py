@@ -40,7 +40,7 @@ def cast_copy(model, dtype):
 
 
 def cast_inputs(inputs, dtype):
-    return tuple(t.to(dtype) if t.is_floating_point() else t for t in inputs)
+    return tuple(t.to(dtype) if t.is_floating_point() else t.clone() for t in inputs)
 
 
 def _already(model, inputs, dtype) -> bool:
@@ -69,7 +69,9 @@ def export_onnx(state: State) -> State:
         model, inputs = state["model"], state["user_inputs"]
         precision = state.get("precision", "fp32")
         dtype = DTYPES[precision]
-        if not _already(model, inputs, dtype):
+        if _already(model, inputs, dtype):
+            inputs = tuple(t.clone() for t in inputs)  # the export runs the model; keep the state's inputs pristine
+        else:
             logger.info("casting a copy of the model and its float inputs to %s", dtype, extra={"stage": stage})
             model, inputs = cast_copy(model, dtype), cast_inputs(inputs, dtype)
 
