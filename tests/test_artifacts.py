@@ -1,9 +1,10 @@
-from kronos_edge import artifacts, onnx_check, onnxsim_check
+from kronos_edge import artifacts, onnx_check, onnxsim_check, tensorrt_check
 
 
 def test_managed_names_agree_with_the_nodes_that_write_them():
     assert onnx_check.EXPORTED_FILE in artifacts.MANAGED_FILES
     assert onnxsim_check.SIMPLIFIED_FILE in artifacts.MANAGED_FILES
+    assert tensorrt_check.ENGINE_FILE in artifacts.MANAGED_FILES
 
 
 def test_clear_removes_managed_files_and_companions_only(tmp_path):

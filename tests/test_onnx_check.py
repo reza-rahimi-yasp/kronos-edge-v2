@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import numpy as np
 import onnx
 import pytest
 import torch
@@ -125,8 +126,8 @@ def test_report_directory_holds_only_the_report(tmp_path, monkeypatch, env_files
     seen = {}
     real_run_container = container.run_container
 
-    def spying_run_container(image, model_path, npz_path, report_dir, artifacts_dir, device, log_level):
-        code = real_run_container(image, model_path, npz_path, report_dir, artifacts_dir, device, log_level)
+    def spying_run_container(image, model_path, npz_path, report_dir, artifacts_dir, precision, device, log_level):
+        code = real_run_container(image, model_path, npz_path, report_dir, artifacts_dir, precision, device, log_level)
         seen["files"] = sorted(f.name for f in Path(report_dir).iterdir())
         return code
 
@@ -175,6 +176,98 @@ def test_failing_model_proto_is_a_stage_not_an_escape(monkeypatch, caplog, good_
     assert state["error"] == "onnx_save"
     assert "materialize" in state["error_detail"]
     assert [r.stage for r in error_records(caplog)] == ["onnx_save"]
+
+
+def test_fp16_casts_a_copy_for_export_and_keeps_the_eager_model_fp32(monkeypatch, good_model, artifacts):
+    seen = {}
+    real_export = onnx_check.export
+
+    def recording_export(model, inputs):
+        seen["param_dtype"] = next(model.parameters()).dtype
+        seen["input_dtypes"] = [t.dtype for t in inputs]
+        return real_export(model, inputs)
+
+    monkeypatch.setattr(onnx_check, "export", recording_export)
+
+    state = eager_check.run(*good_model, artifacts, precision="fp16", device="cpu")
+
+    assert state.get("error") is None
+    assert seen == {"param_dtype": torch.float16, "input_dtypes": [torch.float16]}
+    assert next(state["model"].parameters()).dtype == torch.float32
+    assert [t.dtype for t in state["user_inputs"]] == [torch.float32]
+    exported = onnx.load(artifacts / "model.onnx")
+    assert exported.graph.input[0].type.tensor_type.elem_type == onnx.TensorProto.FLOAT16
+
+
+HALF_MODEL = CONV_RELU.replace("self.relu = torch.nn.ReLU()", "self.relu = torch.nn.ReLU()\n        self.half()").replace(
+    "return [torch.randn(1, 3, 8, 8)]", "return [torch.randn(1, 3, 8, 8).half()]"
+)
+
+
+def test_fp32_casts_a_half_model_up_and_keeps_the_eager_model_half(monkeypatch, tmp_path, artifacts):
+    """Selecting fp32 must apply fp32, not merely leave whatever the model already is."""
+    model = write_model(tmp_path, HALF_MODEL)
+    npz = write_npz(tmp_path, [X.astype(np.float16)])
+    seen = {}
+    real_export = onnx_check.export
+
+    def recording_export(m, inputs):
+        seen["param_dtype"] = next(m.parameters()).dtype
+        seen["input_dtypes"] = [t.dtype for t in inputs]
+        return real_export(m, inputs)
+
+    monkeypatch.setattr(onnx_check, "export", recording_export)
+
+    state = eager_check.run(model, npz, artifacts, precision="fp32", device="cpu")
+
+    assert state.get("error") is None
+    assert seen == {"param_dtype": torch.float32, "input_dtypes": [torch.float32]}
+    assert next(state["model"].parameters()).dtype == torch.float16
+    assert [t.dtype for t in state["user_inputs"]] == [torch.float16]
+    assert onnx.load(artifacts / "model.onnx").graph.input[0].type.tensor_type.elem_type == onnx.TensorProto.FLOAT
+
+
+def test_no_copy_when_the_model_already_has_the_precision(monkeypatch, good_model, artifacts):
+    seen = {}
+    real_export = onnx_check.export
+    monkeypatch.setattr(onnx_check, "export", lambda m, inputs: seen.setdefault("model", m) and real_export(m, inputs))
+
+    state = eager_check.run(*good_model, artifacts, precision="fp32", device="cpu")
+
+    assert state.get("error") is None
+    assert seen["model"] is state["model"]
+
+
+def test_fp16_leaves_integer_inputs_alone(monkeypatch, tmp_path, artifacts):
+    model = tmp_path / "model.py"
+    model.write_text(
+        "import torch\n\n\nclass Model(torch.nn.Module):\n"
+        "    def forward(self, x, idx):\n        return x[idx]\n\n\n"
+        "def get_inputs():\n    return [torch.randn(4, 3), torch.tensor([0, 2])]\n"
+    )
+    npz = tmp_path / "input.npz"
+    np.savez(npz, np.zeros((4, 3), dtype=np.float32), np.array([0, 2], dtype=np.int64))
+    seen = {}
+    real_export = onnx_check.export
+    monkeypatch.setattr(onnx_check, "export", lambda m, inputs: seen.setdefault("dtypes", [t.dtype for t in inputs]) and real_export(m, inputs))
+
+    state = eager_check.run(model, npz, artifacts, precision="fp16", device="cpu")
+
+    assert state.get("error") is None
+    assert seen["dtypes"] == [torch.float16, torch.int64]
+
+
+def test_cast_failure_is_its_own_stage(monkeypatch, caplog, good_model, artifacts):
+    def refuse_half(model, dtype):
+        raise RuntimeError("this module cannot be cast to half")
+
+    monkeypatch.setattr(onnx_check, "cast_copy", refuse_half)
+
+    state = eager_check.run(*good_model, artifacts, precision="fp16", device="cpu")
+
+    assert state["error"] == "onnx_precision"
+    assert "cannot be cast" in state["error_detail"]
+    assert [r.stage for r in error_records(caplog)] == ["onnx_precision"]
 
 
 def test_export_kept_in_state_for_the_next_node(good_model, artifacts):

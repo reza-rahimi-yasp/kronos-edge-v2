@@ -7,8 +7,9 @@ config to a supported environment, then runs the check inside that
 environment's Docker container on the GPU: it loads the model, validates the
 inputs against the model's own reference inputs, runs one forward pass,
 exports the model to ONNX with the dynamo exporter, simplifies the ONNX with
-onnxsim, and prints either a success line or a message saying what to fix.
-The ONNX files land in an artifact directory.
+onnxsim, builds a TensorRT engine at the precision you ask for, and prints
+either a success line or a message saying what to fix. The ONNX files and the
+engine land in an artifact directory.
 
 ## Requirements
 
@@ -28,9 +29,10 @@ a checkout. The examples below do that.
 
 ## Prepare your config file
 
-`config.yaml` names the environment you want. All five fields are required,
-all values are strings, and no other fields are allowed. Version numbers must
-be quoted so YAML does not read them as numbers.
+`config.yaml` names the environment you want and the precision of the
+TensorRT engine. All six fields are required, all values are strings, and no
+other fields are allowed. Version numbers must be quoted so YAML does not
+read them as numbers.
 
 | Field | Type | Example |
 |---|---|---|
@@ -39,8 +41,9 @@ be quoted so YAML does not read them as numbers.
 | `cuda` | dotted version string | `"13.0"` |
 | `tensorrt` | dotted version string | `"11.4.0"` |
 | `torch` | dotted version string | `"2.14.1"` |
+| `precision` | `fp32` or `fp16` | `fp16` |
 
-The config must match one supported environment exactly on every field. The
+The first five fields must match one supported environment exactly. The
 supported environments are listed in `src/kronos_edge/environments.yaml`.
 There is one today:
 
@@ -51,6 +54,15 @@ cuda: "13.0"
 tensorrt: "11.4.0"
 torch: "2.14.1"
 ```
+
+`precision` is a setting, not part of the environment. Before the ONNX
+export, a copy of the model and its floating-point inputs is cast to the
+precision you chose, whatever precision you wrote the model in, so
+`model.onnx`, `model_simplified.onnx`, and `model.engine` all carry it;
+integer inputs are left alone. The eager run always uses the model as you
+wrote it. TensorRT builds a strongly typed engine, so the engine
+computes in exactly the types the ONNX carries. Changing `precision` and
+running again rewrites all three files in the same artifact directory.
 
 ## Prepare your model file
 
@@ -115,11 +127,16 @@ PYTHONPATH=src python -m kronos_edge.workflow path/to/config.yaml path/to/model.
 On success it prints:
 
 ```
-Eager mode run, ONNX export, and ONNX simplification succeeded.
+Eager run, ONNX export, ONNX simplification, and TensorRT engine build (fp16) succeeded.
 ```
 
 The ONNX export runs `torch.onnx.export(..., dynamo=True)` on the same model
-and inputs the forward pass used, then `onnxsim` simplifies the result.
+and inputs the forward pass used, `onnxsim` simplifies the result, and
+TensorRT builds a serialized engine from the simplified model at the
+configured precision. If the model uses an input's values as a shape, for
+example `x.reshape(shape.tolist())`, the engine is built for exactly the
+values in your `input.npz`. Engine builds take seconds for small models and
+can take minutes for large ones; there is no timeout.
 
 ## Artifact directory
 
@@ -134,6 +151,7 @@ On a failure, the files produced before it are kept.
 |---|---|
 | `model.onnx` | The ONNX export. |
 | `model_simplified.onnx` | The onnxsim simplification. |
+| `model.engine` | The serialized TensorRT engine, at the configured precision. Specific to this GPU and TensorRT version. |
 
 When a model's weights exceed the 2 GB protobuf limit they are stored next to
 the `.onnx` file in a companion `.data` file of the same name, for example
@@ -173,6 +191,7 @@ and dtype of every input, `DEBUG` adds the full traceback of a failure.
 | input.npz does not match the inputs returned by get_inputs(). | The detail line names the key and the expected versus found shape and dtype. |
 | Your model cannot be run through eager mode. Either fix it or contact support. | The forward pass raised. The detail line shows the exception. |
 | The ONNX exporter is not available inside the environment container. Contact support. | The image lacks `onnx` or `onnxscript`. |
+| Your model could not be cast to the requested precision for export. Either fix it or contact support. | Casting a copy of the model to half raised; the detail shows the exception. |
 | Your model could not be traced by torch.export for ONNX export. Fix the construct named below. | `torch.export` could not capture the model, for example a branch on a tensor value. The detail names the construct and the line in `model.py`. |
 | Your model was traced but an operator has no ONNX translation. Replace the operator named below or contact support. | The detail names the operator the dynamo exporter cannot translate. |
 | The exported ONNX model could not be serialized or written to the artifact directory. | Check the directory is writable and the machine has memory for the model; the detail shows the error. |
@@ -180,6 +199,10 @@ and dtype of every input, `DEBUG` adds the full traceback of a failure.
 | The ONNX model could not be simplified by onnxsim. Either fix the model or contact support. | onnxsim raised. The detail shows the exception. |
 | onnxsim produced a simplified model that does not pass its check or the ONNX checker. Contact support. | Not something you can fix from the model. |
 | The simplified ONNX model could not be written to the artifact directory. | Check the directory is writable; the detail shows the OS error. |
+| TensorRT is not available inside the environment container. Contact support. | The image lacks `tensorrt`. |
+| TensorRT could not parse the ONNX model. Replace the operator or node named below or contact support. | The detail lists the parser's errors, typically an operator TensorRT has no importer for. |
+| TensorRT could not build an engine from the model. The errors it reported are below. | The detail lists what TensorRT logged, for example an unsupported layer configuration or running out of GPU memory. |
+| The TensorRT engine could not be written to the artifact directory. | Check the directory is writable; the detail shows the OS error. |
 
 ## Run the tests
 

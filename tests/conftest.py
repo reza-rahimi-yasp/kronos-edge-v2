@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import yaml
 
-from kronos_edge import container, eager_check, env_check
+from kronos_edge import container, eager_check, env_check, tensorrt_check
 
 ENVIRONMENT = {
     "gpu": "NVIDIA GeForce RTX 5090",
@@ -14,6 +14,9 @@ ENVIRONMENT = {
     "tensorrt": "11.4.0",
     "torch": "2.14.1",
 }
+
+# config.yaml: the environment fields plus the check settings.
+CONFIG = {**ENVIRONMENT, "precision": "fp32"}
 
 REGISTRY = {
     "environments": [
@@ -75,18 +78,32 @@ def host_matches_registry(monkeypatch):
 def eager_check_runs_in_process(monkeypatch):
     """Stand in for `docker run`: run the eager sub-graph here, on CPU, write its report, return its exit code."""
 
-    def fake_run_container(image, model_path, npz_path, report_dir, artifacts_dir, device, log_level):
-        state = eager_check.run(model_path, npz_path, artifacts_dir, device="cpu")
+    def fake_run_container(image, model_path, npz_path, report_dir, artifacts_dir, precision, device, log_level):
+        state = eager_check.run(model_path, npz_path, artifacts_dir, precision=precision, device="cpu")
         (Path(report_dir) / container.REPORT_FILE).write_text(eager_check.report(state))
         return 0 if state.get("error") is None else 1
 
     monkeypatch.setattr(container, "run_container", fake_run_container)
 
 
+FAKE_ENGINE = b"fake serialized engine"
+
+
+@pytest.fixture(autouse=True)
+def tensorrt_stub(monkeypatch):
+    """Stand in for TensorRT, which only exists in the image: hand back fixed bytes instead of building.
+
+    Returns the real worker for the one test that exercises its import failure.
+    """
+    real_build = tensorrt_check.build
+    monkeypatch.setattr(tensorrt_check, "build", lambda onnx_path, inputs: FAKE_ENGINE)
+    return real_build
+
+
 @pytest.fixture
 def env_files(tmp_path):
     """A valid config.yaml and a registry that matches it."""
-    config = write_yaml(tmp_path / "config.yaml", dict(ENVIRONMENT))
+    config = write_yaml(tmp_path / "config.yaml", dict(CONFIG))
     environments = write_yaml(tmp_path / "environments.yaml", REGISTRY)
     return config, environments
 

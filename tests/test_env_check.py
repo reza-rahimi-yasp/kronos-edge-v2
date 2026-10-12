@@ -2,7 +2,7 @@ import logging
 
 import pytest
 
-from conftest import ENVIRONMENT, REGISTRY, write_yaml
+from conftest import CONFIG, ENVIRONMENT, REGISTRY, write_yaml
 from kronos_edge import env_check
 from kronos_edge.workflow import main, run_check
 
@@ -14,6 +14,19 @@ def error_records(caplog):
 def run(config, environments, good_model):
     model, npz = good_model
     return run_check(config, model, npz, environments_path=environments)
+
+
+@pytest.mark.parametrize("precision", ["fp32", "fp16"])
+def test_precision_is_accepted_and_ignored_by_matching(tmp_path, env_files, good_model, precision):
+    """The registry has no precision field; the config matches on the environment fields alone."""
+    _, environments = env_files
+    config = write_yaml(tmp_path / "config.yaml", {**CONFIG, "precision": precision})
+
+    state = run(config, environments, good_model)
+
+    assert state["outcome"] == "success"
+    assert state["config"].precision == precision
+    assert state["environment"].name == "rtx5090-cuda130"
 
 
 def test_matching_config_reaches_eager_check(env_files, good_model):
@@ -47,18 +60,21 @@ def test_unreadable_config(tmp_path, caplog, env_files, good_model, contents, fr
 
 
 def without(key):
-    return {k: v for k, v in ENVIRONMENT.items() if k != key}
+    return {k: v for k, v in CONFIG.items() if k != key}
 
 
 @pytest.mark.parametrize(
     "data, fragment",
     [
         pytest.param(without("tensorrt"), "tensorrt", id="missing_field"),
-        pytest.param({**ENVIRONMENT, "foo": "bar"}, "foo", id="extra_field"),
-        pytest.param({**ENVIRONMENT, "cuda": 13.0}, "quoted", id="unquoted_version"),
-        pytest.param({**ENVIRONMENT, "torch": "latest"}, "torch", id="bad_version_format"),
-        pytest.param({**ENVIRONMENT, "gpu": ""}, "gpu", id="empty_gpu"),
-        pytest.param([ENVIRONMENT], "mapping", id="not_a_mapping"),
+        pytest.param(without("precision"), "precision", id="missing_precision"),
+        pytest.param({**CONFIG, "precision": "int8"}, "fp16", id="unsupported_precision"),
+        pytest.param({**CONFIG, "precision": "FP16"}, "fp16", id="precision_case_sensitive"),
+        pytest.param({**CONFIG, "foo": "bar"}, "foo", id="extra_field"),
+        pytest.param({**CONFIG, "cuda": 13.0}, "quoted", id="unquoted_version"),
+        pytest.param({**CONFIG, "torch": "latest"}, "torch", id="bad_version_format"),
+        pytest.param({**CONFIG, "gpu": ""}, "gpu", id="empty_gpu"),
+        pytest.param([CONFIG], "mapping", id="not_a_mapping"),
     ],
 )
 def test_schema_violations(tmp_path, caplog, env_files, good_model, data, fragment):
@@ -89,7 +105,7 @@ def test_broken_registry(tmp_path, caplog, env_files, good_model):
 @pytest.mark.parametrize("field", sorted(ENVIRONMENT))
 def test_mismatch_on_any_field_is_rejected(tmp_path, caplog, env_files, good_model, field):
     _, environments = env_files
-    config = write_yaml(tmp_path / "mismatch.yaml", {**ENVIRONMENT, field: "9.9.9"})
+    config = write_yaml(tmp_path / "mismatch.yaml", {**CONFIG, field: "9.9.9"})
 
     state = run(config, environments, good_model)
 

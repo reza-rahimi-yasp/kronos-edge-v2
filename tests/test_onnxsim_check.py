@@ -58,7 +58,7 @@ def test_large_simplified_model_is_saved_with_external_data(monkeypatch, good_mo
 
     assert state.get("error") is None
     assert sorted(f.name for f in artifacts.iterdir()) == [
-        "model.onnx", "model_simplified.onnx", "model_simplified.onnx.data"
+        "model.engine", "model.onnx", "model_simplified.onnx", "model_simplified.onnx.data"
     ]
     in_state = state["simplified_onnx"]
     assert in_state.graph.initializer and all(t.raw_data for t in in_state.graph.initializer)

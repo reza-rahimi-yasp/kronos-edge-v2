@@ -10,7 +10,8 @@ from pathlib import Path
 
 EXPORTED_FILE = "model.onnx"
 SIMPLIFIED_FILE = "model_simplified.onnx"
-MANAGED_FILES = (EXPORTED_FILE, SIMPLIFIED_FILE)
+ENGINE_FILE = "model.engine"
+MANAGED_FILES = (EXPORTED_FILE, SIMPLIFIED_FILE, ENGINE_FILE)
 
 # Weights above the protobuf limit go to a companion file with this suffix.
 EXTERNAL_DATA_SUFFIX = ".data"

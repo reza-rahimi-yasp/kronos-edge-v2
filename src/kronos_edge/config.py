@@ -1,6 +1,6 @@
 """Schema for the user's config.yaml and the supported-environment registry."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, ValidationError
@@ -22,6 +22,18 @@ class EnvironmentConfig(BaseModel):
 
 CONFIG_FIELDS = tuple(EnvironmentConfig.model_fields)
 
+PRECISIONS = ("fp32", "fp16")
+
+
+class Config(EnvironmentConfig):
+    """The user's config.yaml: the environment fields plus the check settings.
+
+    Settings are not part of environment matching; changing one re-runs the
+    checks in the same environment and overwrites the artifacts.
+    """
+
+    precision: Literal["fp32", "fp16"]
+
 
 class Environment(EnvironmentConfig):
     """One entry of the registry: a config plus the image that provides it."""
@@ -31,7 +43,7 @@ class Environment(EnvironmentConfig):
     dockerfile: StrictStr
 
     def matches(self, config: EnvironmentConfig) -> bool:
-        return self.model_dump(include=set(CONFIG_FIELDS)) == config.model_dump()
+        return self.model_dump(include=set(CONFIG_FIELDS)) == config.model_dump(include=set(CONFIG_FIELDS))
 
 
 class Registry(BaseModel):
@@ -47,11 +59,11 @@ def read_yaml(path):
         return yaml.safe_load(f)
 
 
-def parse_config(data) -> EnvironmentConfig:
+def parse_config(data) -> Config:
     if not isinstance(data, dict):
         raise InvalidConfig("top level must be a mapping of field: value")
     try:
-        return EnvironmentConfig.model_validate(data)
+        return Config.model_validate(data)
     except ValidationError as exc:
         lines = [f"{'.'.join(str(p) for p in e['loc']) or '<root>'}: {e['msg']}" for e in exc.errors()]
         if any(e["type"] == "string_type" for e in exc.errors()):

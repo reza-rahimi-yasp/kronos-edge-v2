@@ -4,23 +4,25 @@ import logging
 from collections.abc import Callable
 from typing import Any, TypedDict
 
-from kronos_edge.config import Environment, EnvironmentConfig
+from kronos_edge.config import Config, Environment
 
 
 class State(TypedDict, total=False):
     config_path: str
     environments_path: str
-    config: EnvironmentConfig
+    config: Config
     environment: Environment
     model_path: str
     npz_path: str
     artifacts_path: str
     artifacts_dir: str
+    precision: str
     model: Any
     get_inputs: Callable[[], object]
     user_inputs: tuple[Any, ...]
     onnx_model: Any
     simplified_onnx: Any
+    engine: bytes
     device: str
     log_level: str
     error: str | None

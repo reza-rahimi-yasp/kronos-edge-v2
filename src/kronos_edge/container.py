@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict
 
 from kronos_edge import artifacts as artifact_files
 from kronos_edge.log import get_logger
-from kronos_edge.messages import CONTAINER as CUSTOMER_MESSAGES, EAGER, ONNX, ONNXSIM
+from kronos_edge.messages import CONTAINER as CUSTOMER_MESSAGES, EAGER, ONNX, ONNXSIM, TENSORRT
 from kronos_edge.state import State, fail
 
 logger = get_logger(__name__)
@@ -30,7 +30,9 @@ class Report(BaseModel):
     error_detail: str = ""
 
 
-def build_command(image: str, model_path, npz_path, report_dir, artifacts_dir, device: str, log_level: str) -> list[str]:
+def build_command(
+    image: str, model_path, npz_path, report_dir, artifacts_dir, precision: str, device: str, log_level: str
+) -> list[str]:
     return [
         "docker", "run", "--rm", "--gpus", "all",
         "-v", f"{Path(model_path).resolve()}:/work/model.py:ro",
@@ -40,14 +42,16 @@ def build_command(image: str, model_path, npz_path, report_dir, artifacts_dir, d
         image,
         "python", "-m", "kronos_edge.eager_check", "/work/model.py", "/work/input.npz",
         "--report", f"/work/out/{REPORT_FILE}", "--artifacts", "/work/artifact",
-        "--device", device, "--log-level", log_level,
+        "--precision", precision, "--device", device, "--log-level", log_level,
     ]
 
 
-def run_container(image: str, model_path, npz_path, report_dir, artifacts_dir, device: str, log_level: str) -> int:
+def run_container(
+    image: str, model_path, npz_path, report_dir, artifacts_dir, precision: str, device: str, log_level: str
+) -> int:
     """Run the container with stdout and stderr inherited; return its exit code."""
     return subprocess.run(
-        build_command(image, model_path, npz_path, report_dir, artifacts_dir, device, log_level)
+        build_command(image, model_path, npz_path, report_dir, artifacts_dir, precision, device, log_level)
     ).returncode
 
 
@@ -56,7 +60,7 @@ def _read_report(report_dir, code: int) -> Report:
     if not path.exists():
         raise RuntimeError(f"container exited {code} without writing a report")
     report = Report.model_validate_json(path.read_text())
-    if report.error is not None and report.error not in EAGER | ONNX | ONNXSIM:
+    if report.error is not None and report.error not in EAGER | ONNX | ONNXSIM | TENSORRT:
         raise ValueError(f"report names unknown failure stage {report.error!r}")
     expected = 0 if report.error is None else 1
     if code != expected:
@@ -72,10 +76,14 @@ def run_in_container(state: State) -> State:
         artifacts = Path(state["artifacts_path"])
         artifacts.mkdir(parents=True, exist_ok=True)
         artifact_files.clear(artifacts)
-        logger.info("running checks in %s on %s, artifacts in %s", image, DEVICE, artifacts, extra={"stage": stage})
+        precision = state["config"].precision
+        logger.info(
+            "running checks in %s on %s at %s, artifacts in %s", image, DEVICE, precision, artifacts, extra={"stage": stage}
+        )
         with tempfile.TemporaryDirectory() as report_dir:
             code = run_container(
-                image, state["model_path"], state["npz_path"], report_dir, artifacts, DEVICE, state.get("log_level", "INFO")
+                image, state["model_path"], state["npz_path"], report_dir, artifacts, precision, DEVICE,
+                state.get("log_level", "INFO"),
             )
             report = _read_report(report_dir, code)
     except Exception as exc:
