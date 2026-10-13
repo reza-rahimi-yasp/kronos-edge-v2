@@ -26,6 +26,11 @@ MISSING_TOKEN_PANEL = (
     "╰─────────────────────────────────╯\n"
 )
 
+INVALID_TOKEN_RESPONSE = (
+    "POST https://compile.yasp.ai/api/token?audience=kernelgen-api HTTP 401\n"
+    '{"code": "ERROR_UNAUTHORIZED", "message": "Invalid authentication credentials."}'
+)
+
 
 def recording_toolkit(calls, tmp_path):
     """The stub, plus a record of each command and of what the artifact directory held when it ran."""
@@ -146,6 +151,7 @@ def test_invalid_eval_routing_is_a_schema_violation(tmp_path, env_files, good_mo
             "kernelgen_toolkit", "yasp-agent", id="toolkit_not_installed",
         ),
         pytest.param(failing_toolkit(1, stderr=MISSING_TOKEN_PANEL), "kernelgen_credentials", "YASP_API_KEY", id="no_api_key"),
+        pytest.param(failing_toolkit(0, stderr=INVALID_TOKEN_RESPONSE), "kernelgen_credentials", "YASP_API_KEY", id="invalid_api_key"),
         pytest.param(
             failing_toolkit(1, stdout=FAKE_TASK_LINE.replace("completed", "failed"), stderr="╭─ Failure reason ─╮\n│ worker exploded │\n╰──╯\n"),
             "kernelgen_compile", "worker exploded", id="job_failed",
@@ -295,4 +301,3 @@ def test_kernelgen_requires_the_reference_and_the_tensorrt_output(tmp_path, capl
 def test_kernelgen_files_are_managed_artifacts():
     assert {artifacts.PT2_FILE, artifacts.KERNEL_FILE, artifacts.KERNELGEN_REPORT_FILE, artifacts.KERNELGEN_EVAL_FILE} <= set(artifacts.MANAGED_FILES)
     assert kernelgen_check.KERNEL_FILE == artifacts.KERNEL_FILE
-

@@ -44,12 +44,14 @@ logger = get_logger(__name__)
 TOOLKIT = "yasp-toolkit"
 # The title of the panel the toolkit prints when it finds no API key in the environment or the keyring.
 MISSING_TOKEN = "Missing authentication token"
+# The hosted API uses this code when the key is missing or invalid.
+UNAUTHORIZED = "ERROR_UNAUTHORIZED"
 # `eval compare` keys its results.json by implementation slot; the kernel is the only one.
 RESULT_KEY = "opt_1"
 
 
 class MissingCredentials(RuntimeError):
-    """The toolkit found no Yasp API key."""
+    """The toolkit found no valid Yasp API key."""
 
 
 class ToolkitFailed(RuntimeError):
@@ -69,7 +71,7 @@ def _invoke(stage: str, args: list[str], expected: Path) -> None:
     output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part and part.strip())
     for line in output.splitlines():
         logger.debug("%s: %s", TOOLKIT, line, extra={"stage": stage})
-    if MISSING_TOKEN in output:
+    if MISSING_TOKEN in output or UNAUTHORIZED in output:
         raise MissingCredentials(output)
     if result.returncode != 0:
         raise ToolkitFailed(f"{TOOLKIT} exited {result.returncode}\n{output}")
