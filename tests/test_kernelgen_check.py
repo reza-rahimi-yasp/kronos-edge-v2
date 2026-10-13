@@ -63,9 +63,10 @@ def test_kernelgen_runs_after_the_container_and_evaluation_after_kernelgen(tmp_p
     state = run(env_files, *good_model)
 
     assert state["outcome"] == "success"
-    assert [args[:2] for args, _ in calls] == [["kernelgen", "compile"], ["eval", "compare"]]
-    compile_args, seen_before_compile = calls[0]
-    eval_args, seen_before_eval = calls[1]
+    # The evaluator listing comes first (test_evaluator_check), then kernelgen, then the evaluation.
+    assert [args[:2] for args, _ in calls] == [["eval", "workers"], ["kernelgen", "compile"], ["eval", "compare"]]
+    compile_args, seen_before_compile = calls[1]
+    eval_args, seen_before_eval = calls[2]
     # kernelgen starts only once the container has produced the reference and the TensorRT engine.
     assert {"model.pt2", "model.engine", "model.onnx", "model_simplified.onnx"} <= set(seen_before_compile)
     assert "kernel.py" not in seen_before_compile
@@ -104,7 +105,8 @@ def test_eval_routing_pins_this_machines_evaluator_for_both_commands(tmp_path, m
     state = run_with_config(tmp_path, env_files, eval_routing="reza-fractal")
 
     assert state["outcome"] == "success"
-    (compile_args, _), (eval_args, _) = calls
+    (workers_args, _), (compile_args, _), (eval_args, _) = calls
+    assert option(workers_args, "--tag") == "routing=reza-fractal"
     assert option(compile_args, "--eval-routing") == "reza-fractal"
     assert option(eval_args, "--routing") == "reza-fractal"
 
@@ -163,6 +165,8 @@ def test_kernelgen_failures_are_stages_and_skip_the_evaluation(tmp_path, caplog,
     evaluations = []
 
     def dispatch(args):
+        if args[:2] == ["eval", "workers"]:  # the evaluator listing before kernelgen is not under test here
+            return fake_toolkit(args)
         if args[:2] == ["eval", "compare"]:
             evaluations.append(args)
         return toolkit(args)
@@ -296,7 +300,7 @@ def test_kernelgen_requires_the_reference_and_the_tensorrt_output(tmp_path, capl
     assert state["error"] == stage
     assert missing in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == [stage]
-    assert calls == []
+    assert [args[:2] for args, _ in calls] == [["eval", "workers"]]  # nothing was submitted to kernelgen
 
 
 def test_kernelgen_files_are_managed_artifacts():

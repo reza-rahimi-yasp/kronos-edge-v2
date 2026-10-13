@@ -64,8 +64,8 @@ def run_toolkit(args: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run([TOOLKIT, *args], capture_output=True, text=True, env={**os.environ, "COLUMNS": "200"})
 
 
-def _invoke(stage: str, args: list[str], expected: Path) -> None:
-    """Run the toolkit and require ``expected`` to exist afterwards; its output goes to the log, and to the detail on failure."""
+def run_logged(stage: str, args: list[str]) -> tuple[subprocess.CompletedProcess, str]:
+    """Run the toolkit and return the result with its combined output; the output goes to the log, and to the detail on failure."""
     logger.info("running %s %s", TOOLKIT, " ".join(args), extra={"stage": stage})
     result = run_toolkit(args)
     output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part and part.strip())
@@ -75,6 +75,12 @@ def _invoke(stage: str, args: list[str], expected: Path) -> None:
         raise MissingCredentials(output)
     if result.returncode != 0:
         raise ToolkitFailed(f"{TOOLKIT} exited {result.returncode}\n{output}")
+    return result, output
+
+
+def _invoke(stage: str, args: list[str], expected: Path) -> None:
+    """Run the toolkit and require ``expected`` to exist afterwards."""
+    _, output = run_logged(stage, args)
     if not expected.is_file():
         raise ToolkitFailed(f"{TOOLKIT} exited 0 without writing {expected.name}\n{output}")
 
