@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kronos Edge V2 Feature"
+  short_description: "Implement, review, and hand off Kronos Edge V2 features"
+  default_prompt: "Use $kronos-edge-v2-feature to add this feature to kronos-edge-v2."

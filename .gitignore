@@ -47,6 +47,10 @@ htmlcov/
 *.sqlite3
 *.db
 
+# Local check artifacts
+.artifact/
+.artifacts/
+
 # Logs
 *.log
 
