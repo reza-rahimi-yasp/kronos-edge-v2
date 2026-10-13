@@ -26,6 +26,11 @@ MISSING_TOKEN_PANEL = (
     "╰─────────────────────────────────╯\n"
 )
 
+INVALID_TOKEN_RESPONSE = (
+    "POST https://compile.yasp.ai/api/token?audience=kernelgen-api HTTP 401\n"
+    '{"code": "ERROR_UNAUTHORIZED", "message": "Invalid authentication credentials."}'
+)
+
 
 def recording_toolkit(calls, tmp_path):
     """The stub, plus a record of each command and of what the artifact directory held when it ran."""
@@ -146,6 +151,7 @@ def test_invalid_eval_routing_is_a_schema_violation(tmp_path, env_files, good_mo
             "kernelgen_toolkit", "yasp-agent", id="toolkit_not_installed",
         ),
         pytest.param(failing_toolkit(1, stderr=MISSING_TOKEN_PANEL), "kernelgen_credentials", "YASP_API_KEY", id="no_api_key"),
+        pytest.param(failing_toolkit(0, stderr=INVALID_TOKEN_RESPONSE), "kernelgen_credentials", "not accepted", id="invalid_api_key"),
         pytest.param(
             failing_toolkit(1, stdout=FAKE_TASK_LINE.replace("completed", "failed"), stderr="╭─ Failure reason ─╮\n│ worker exploded │\n╰──╯\n"),
             "kernelgen_compile", "worker exploded", id="job_failed",
@@ -232,6 +238,7 @@ def eval_fails(code, stderr):
         pytest.param(eval_fails(1, "╭─ Failure reason ─╮\n│ evaluator crashed │\n╰──╯\n"), "kernelgen_eval", "evaluator crashed", id="eval_failed"),
         pytest.param(eval_fails(0, "╭─ POST https://compile.yasp.ai/eval/v1/evals ─╮\n│ HTTP 503 │\n╰──╯\n"), "kernelgen_eval", "503", id="eval_exit_zero_without_results"),
         pytest.param(eval_fails(1, MISSING_TOKEN_PANEL), "kernelgen_credentials", "YASP_API_KEY", id="no_api_key"),
+        pytest.param(eval_fails(0, INVALID_TOKEN_RESPONSE), "kernelgen_credentials", "not accepted", id="invalid_api_key"),
         pytest.param(eval_writes("not json"), "kernelgen_eval_results", "kernelgen_eval.json", id="results_not_json"),
         pytest.param(eval_writes({"kernel_1": PASSING_RESULT}), "kernelgen_eval_results", "opt_1", id="results_without_opt_1"),
         pytest.param(eval_writes({"opt_1": {k: v for k, v in PASSING_RESULT.items() if k != "speedup"}}), "kernelgen_eval_results", "speedup", id="results_without_speedup"),
@@ -295,4 +302,3 @@ def test_kernelgen_requires_the_reference_and_the_tensorrt_output(tmp_path, capl
 def test_kernelgen_files_are_managed_artifacts():
     assert {artifacts.PT2_FILE, artifacts.KERNEL_FILE, artifacts.KERNELGEN_REPORT_FILE, artifacts.KERNELGEN_EVAL_FILE} <= set(artifacts.MANAGED_FILES)
     assert kernelgen_check.KERNEL_FILE == artifacts.KERNEL_FILE
-
