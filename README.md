@@ -310,7 +310,7 @@ and dtype of every input, `DEBUG` adds the full traceback of a failure.
 | The kernelgen reference (model.pt2) is missing from the artifact directory. Contact support. | The container reported success without writing the reference. |
 | The TensorRT engine (model.engine) kernelgen waits for is missing from the artifact directory. Contact support. | The container reported success without writing the engine. |
 | The yasp-toolkit command is not available. Install yasp-agent[gaia] into the environment that runs the check. | Install the packages in `requirements.txt` with the yasp index. |
-| No Yasp API key was found. Export YASP_API_KEY (see .env.example) or store a key with `yasp-toolkit keyring set`. | See "Set up your Yasp API key". |
+| No Yasp API key was found, or the key was not accepted. Export a valid YASP_API_KEY (see .env.example) or store one with `yasp-toolkit keyring set`. | See "Set up your Yasp API key". If a key is set, the service rejected it: create a new one. |
 | The kernelgen optimization did not produce a kernel. The toolkit's output is below. | The kernelgen job failed or the service could not be reached; the detail shows the toolkit's output, including the task id. |
 | The kernelgen kernel could not be evaluated on this machine. The toolkit's output is below. | The evaluation task failed or no evaluator took it; check `eval_routing` and that your evaluator is registered. |
 | The evaluator's results for the kernelgen kernel could not be read. Contact support. | Not something you can fix from the model. |

@@ -83,7 +83,7 @@ KERNELGEN = {
     "kernelgen_reference": "The kernelgen reference (model.pt2) is missing from the artifact directory. Contact support.",
     "kernelgen_engine": "The TensorRT engine (model.engine) kernelgen waits for is missing from the artifact directory. Contact support.",
     "kernelgen_toolkit": "The yasp-toolkit command is not available. Install yasp-agent[gaia] into the environment that runs the check.",
-    "kernelgen_credentials": "No Yasp API key was found. Export YASP_API_KEY (see .env.example) or store a key with `yasp-toolkit keyring set`.",
+    "kernelgen_credentials": "No Yasp API key was found, or the key was not accepted. Export a valid YASP_API_KEY (see .env.example) or store one with `yasp-toolkit keyring set`.",
     "kernelgen_compile": "The kernelgen optimization did not produce a kernel. The toolkit's output is below.",
     "kernelgen_eval": "The kernelgen kernel could not be evaluated on this machine. The toolkit's output is below.",
     "kernelgen_eval_results": "The evaluator's results for the kernelgen kernel could not be read. Contact support.",
