@@ -82,12 +82,30 @@ def host_matches_registry(monkeypatch):
 def eager_check_runs_in_process(monkeypatch):
     """Stand in for `docker run`: run the eager sub-graph here, on CPU, write its report, return its exit code."""
 
-    def fake_run_container(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level):
-        state = eager_check.run(model_path, npz_path, artifacts_dir, precision=precision, threshold=threshold, device="cpu")
+    def fake_run_container(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level, dependencies):
+        state = eager_check.run(
+            model_path, npz_path, artifacts_dir, precision=precision, threshold=threshold, device="cpu",
+            dependencies=dependencies,
+        )
         (Path(report_dir) / container.REPORT_FILE).write_text(eager_check.report(state))
         return 0 if state.get("error") is None else 1
 
     monkeypatch.setattr(container, "run_container", fake_run_container)
+
+
+class _Installed(list):
+    """The lists pip was asked to install; `real` is the worker itself for the tests that exercise it."""
+
+    real = None
+
+
+@pytest.fixture(autouse=True)
+def pip_stub(monkeypatch):
+    """Tests never shell out: record what the container would pip install instead of installing it."""
+    installed = _Installed()
+    installed.real = eager_check.install
+    monkeypatch.setattr(eager_check, "install", lambda packages: installed.append(list(packages)))
+    return installed
 
 
 FAKE_ENGINE = b"fake serialized engine"

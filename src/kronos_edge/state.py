@@ -18,6 +18,7 @@ class State(TypedDict, total=False):
     artifacts_dir: str
     precision: str
     threshold: float
+    dependencies: list[str]
     model: Any
     get_inputs: Callable[[], object]
     user_inputs: tuple[Any, ...]

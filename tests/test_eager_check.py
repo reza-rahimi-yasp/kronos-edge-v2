@@ -1,9 +1,13 @@
 import logging
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pytest
 
+from conftest import CONFIG, write_yaml
+from kronos_edge import eager_check
 from kronos_edge.workflow import main, route_on_error, run_check
 
 CONV_RELU = """
@@ -80,6 +84,8 @@ def get_inputs():
 """
 
 SYNTAX_ERROR = "def (:\n"
+MISSING_PACKAGE = "import kronos_no_such_package\n" + CONV_RELU
+USES_DEPENDENCY = "import kronos_fake_dependency\n" + CONV_RELU
 
 X = np.zeros((1, 3, 8, 8), dtype=np.float32)
 XY = [np.zeros((2, 3), dtype=np.float32), np.zeros((2, 3), dtype=np.float32)]
@@ -134,6 +140,7 @@ def test_success(tmp_path, caplog, env_files, source, arrays):
         pytest.param(TYPO, [X], "forward", "cannot be run through eager mode", id="forward_typo"),
         pytest.param(None, [X], "import_module", "could not be loaded", id="model_file_missing"),
         pytest.param(SYNTAX_ERROR, [X], "import_module", "could not be loaded", id="syntax_error"),
+        pytest.param(MISSING_PACKAGE, [X], "missing_dependency", "dependencies", id="missing_package"),
         pytest.param(NO_MODEL_CLASS, [X], "find_model_class", "does not define a 'Model' class", id="no_model_class"),
         pytest.param(MODEL_NOT_MODULE, [X], "find_model_class", "does not define a 'Model' class", id="model_not_module"),
         pytest.param(NO_GET_INPUTS, [X], "find_get_inputs", "get_inputs() or get_fwd_args()", id="no_get_inputs"),
@@ -155,6 +162,77 @@ def test_failure(tmp_path, caplog, env_files, source, arrays, stage, fragment):
     records = error_records(caplog)
     assert len(records) == 1
     assert records[0].stage == stage
+
+
+def test_missing_package_names_the_module(tmp_path, env_files):
+    state = run(env_files, write_model(tmp_path, MISSING_PACKAGE), write_npz(tmp_path, [X]))
+
+    assert "kronos_no_such_package" in state["customer_message"]
+    assert "config.yaml" in state["customer_message"]
+
+
+def test_dependencies_are_installed_before_model_py_is_imported(tmp_path, monkeypatch, env_files, pip_stub):
+    """The model may import a package that only exists once pip has run."""
+    config, environments = env_files
+    config = write_yaml(tmp_path / "deps.yaml", {**CONFIG, "dependencies": ["kronos-fake-dependency"]})
+    site = tmp_path / "site"
+    site.mkdir()
+    monkeypatch.syspath_prepend(site)
+
+    def fake_install(packages):
+        pip_stub.append(list(packages))
+        (site / "kronos_fake_dependency.py").write_text("")
+
+    monkeypatch.setattr(eager_check, "install", fake_install)
+
+    state = run_check(config, write_model(tmp_path, USES_DEPENDENCY), write_npz(tmp_path, [X]), environments_path=environments)
+
+    assert state["outcome"] == "success"
+    assert pip_stub == [["kronos-fake-dependency"]]
+
+
+def test_failed_install_is_its_own_stage(tmp_path, caplog, monkeypatch, env_files):
+    config, environments = env_files
+    config = write_yaml(tmp_path / "deps.yaml", {**CONFIG, "dependencies": ["kronos-fake-dependency"]})
+
+    def failing_install(packages):
+        raise RuntimeError("pip exited 1\nERROR: No matching distribution found for kronos-fake-dependency")
+
+    monkeypatch.setattr(eager_check, "install", failing_install)
+
+    state = run_check(config, write_model(tmp_path, CONV_RELU), write_npz(tmp_path, [X]), environments_path=environments)
+
+    assert state["outcome"] == "failure"
+    assert state["error"] == "install_dependencies"
+    assert "could not be installed" in state["customer_message"]
+    assert "No matching distribution" in state["customer_message"]
+    assert [r.stage for r in error_records(caplog)] == ["install_dependencies"]
+
+
+def test_install_runs_pip_in_this_interpreter(monkeypatch, pip_stub):
+    """The real worker: pip of the container's venv, output captured so stdout stays the user's."""
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"], seen["kwargs"] = cmd, kwargs
+        return subprocess.CompletedProcess(cmd, 0, stdout="Successfully installed timm", stderr="")
+
+    monkeypatch.setattr(eager_check.subprocess, "run", fake_run)
+
+    pip_stub.real(["timm", "einops==0.8.0"])
+
+    assert seen["cmd"] == [sys.executable, "-m", "pip", "install", "--no-cache-dir", "timm", "einops==0.8.0"]
+    assert seen["kwargs"].get("capture_output") is True
+
+
+def test_install_failure_carries_pips_output(monkeypatch, pip_stub):
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="ERROR: No matching distribution found for nope")
+
+    monkeypatch.setattr(eager_check.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="No matching distribution"):
+        pip_stub.real(["nope"])
 
 
 def test_forward_failure_includes_exception_text(tmp_path, env_files):

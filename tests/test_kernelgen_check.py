@@ -275,7 +275,7 @@ def test_kernelgen_requires_the_reference_and_the_tensorrt_output(tmp_path, capl
     calls = []
     monkeypatch.setattr(kernelgen_check, "run_toolkit", recording_toolkit(calls, tmp_path))
 
-    def fake_container(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level):
+    def fake_container(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level, dependencies):
         for name in produced:
             (Path(artifacts_dir) / name).write_bytes(b"x")
         (Path(report_dir) / container.REPORT_FILE).write_text(json.dumps({"error": None, "benchmark": BENCHMARK}))

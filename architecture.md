@@ -57,7 +57,8 @@ Every node either advances the state or records a failure stage in
 - `load_config` (`env_check.py`): reads and validates the user's `config.yaml`
   against the Pydantic schema in `config.py`: the five environment fields plus
   the `precision`, `metric`, `threshold`, and `eval_routing` settings, all
-  required. Stages: `read_config`, `validate_config`.
+  required, and the optional `dependencies` list. Stages: `read_config`,
+  `validate_config`.
 - `match_environment` (`env_check.py`): loads `environments.yaml`, finds the
   entry equal to the config on the five environment fields, and checks the host GPU via
   `nvidia-smi` and the image via `docker image inspect`. Stages:
@@ -66,7 +67,8 @@ Every node either advances the state or records a failure stage in
   deletes the managed files listed in `artifacts.py` from a previous run, runs
   the container graph with `docker run --gpus all`, `model.py` and
   `input.npz` mounted read-only, the report and artifact directories mounted
-  writable, and the precision passed on the command line, then validates `report.json` and requires the exit code
+  writable, and the precision and each of the config's `dependencies`
+  (`--dependency`) passed on the command line, then validates `report.json` and requires the exit code
   to agree with it. Stage: `container_run`; a
   failure reported by the container is passed through under its own stage.
 - `kernelgen` (`kernelgen_check.py`): requires `model.pt2` and `model.engine`
@@ -93,11 +95,15 @@ Every node either advances the state or records a failure stage in
 ## Container graph
 
 Run by `python -m kronos_edge.eager_check` with `--device cuda` and the
-`--precision` and `--threshold` from the config.
+`--precision`, `--threshold`, and `--dependency` values from the config.
 
-- `load_model` (`eager_check.py`): selects the device, imports `model.py`,
-  finds `Model` and `get_inputs()` or `get_fwd_args()`, and constructs the
-  model. Stages: `select_device`, `import_module`, `find_model_class`,
+- `load_model` (`eager_check.py`): selects the device, pip-installs the
+  config's `dependencies` into the container's venv (output captured, so
+  stdout stays the user's), imports `model.py`, finds `Model` and
+  `get_inputs()` or `get_fwd_args()`, and constructs the model. An import that
+  raises `ModuleNotFoundError` is reported as `missing_dependency` with the
+  module's name. Stages: `select_device`, `install_dependencies`,
+  `import_module`, `missing_dependency`, `find_model_class`,
   `find_get_inputs`, `init_model`.
 - `validate_inputs` (`eager_check.py`): calls `get_inputs()`, loads
   `input.npz`, and checks keys, shapes, and dtypes. Stages: `get_inputs`,
