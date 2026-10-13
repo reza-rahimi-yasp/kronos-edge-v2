@@ -39,6 +39,20 @@ decisions: do not add file listings, commands, or summaries here.
   and overwrites the artifacts. `config.Config` is the environment schema plus
   the settings. A metric is accepted only once it is implemented; the
   threshold is the user's, never a constant in code.
+- Packages `model.py` needs beyond the image are the user's to declare, as
+  pip requirements under `dependencies` in `config.yaml` (a setting, optional).
+  The container pip-installs them into its venv at the start of every run,
+  before `model.py` is imported; they are never added to a Dockerfile or
+  committed to an image, so the image stays the registry entry's versions and
+  nothing else. The image sets `PIP_EXTRA_INDEX_URL` to its torch index so
+  CUDA-built packages resolve to the image's CUDA. The install is constrained
+  to every distribution already in the venv, torch's CUDA build included, so
+  a requirement, direct or transitive, that would replace an image package is
+  a resolver conflict reported at `install_dependencies` and nothing is
+  installed: the environment the checks run in stays the one that was
+  validated. A `ModuleNotFoundError`
+  while importing `model.py` is its own stage, `missing_dependency`, naming
+  the module, so the user learns which package to declare.
 - Precision is applied once, at the ONNX export, by casting a copy of the
   model and its float inputs to the configured dtype for both `fp32` and
   `fp16`, whatever the user wrote the model in. TensorRT 11 has no precision

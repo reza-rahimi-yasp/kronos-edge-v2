@@ -16,6 +16,10 @@ ENV PATH=/opt/venv/bin:$PATH
 RUN pip install --no-cache-dir "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cu130 \
     && pip install --no-cache-dir "tensorrt-cu13==${TENSORRT_VERSION}" langgraph numpy "onnx==1.23.2" "onnxscript==0.7.2" "onnxsim==0.8.1" pyyaml pydantic
 
+# The user's `dependencies` are pip-installed at run time; resolve them against the same index as torch so
+# packages with CUDA builds (torchvision, for one) match the image's CUDA.
+ENV PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu130
+
 COPY src /opt/kronos-edge/src
 ENV PYTHONPATH=/opt/kronos-edge/src
 

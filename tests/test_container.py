@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from conftest import GOOD_MODEL
+from conftest import CONFIG, GOOD_MODEL, write_yaml
 from kronos_edge import artifacts, container, eager_check, onnxsim_check
 
 BENCHMARK = {
@@ -42,7 +42,7 @@ def run(env_files, good_model):
 def fake_container(monkeypatch, report=None, code=0):
     """Replace docker run with something that writes `report` (if given) and exits with `code`."""
 
-    def fake(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level):
+    def fake(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level, dependencies):
         if report is not None:
             (Path(report_dir) / container.REPORT_FILE).write_text(report)
         return code
@@ -53,7 +53,9 @@ def fake_container(monkeypatch, report=None, code=0):
 def test_build_command_mounts_files_and_requests_gpu(tmp_path):
     model, npz, out, artifacts = tmp_path / "m.py", tmp_path / "i.npz", tmp_path / "out", tmp_path / ".artifact"
 
-    cmd = container.build_command("kronos-edge:x", model, npz, out, artifacts, "fp16", 0.99, "cuda", "DEBUG")
+    cmd = container.build_command(
+        "kronos-edge:x", model, npz, out, artifacts, "fp16", 0.99, "cuda", "DEBUG", ["timm", "einops==0.8.0"]
+    )
 
     assert cmd[:3] == ["docker", "run", "--rm"]
     assert cmd[cmd.index("--gpus") + 1] == "all"
@@ -65,7 +67,31 @@ def test_build_command_mounts_files_and_requests_gpu(tmp_path):
         "python", "-m", "kronos_edge.eager_check", "/work/model.py", "/work/input.npz",
         "--report", "/work/out/report.json", "--artifacts", "/work/artifact",
         "--precision", "fp16", "--threshold", "0.99", "--device", "cuda", "--log-level", "DEBUG",
+        "--dependency", "timm", "--dependency", "einops==0.8.0",
     ]
+
+
+def test_no_dependencies_adds_no_flags(tmp_path):
+    cmd = container.build_command("kronos-edge:x", tmp_path / "m.py", tmp_path / "i.npz", tmp_path, tmp_path, "fp32", 0.99, "cuda", "INFO", [])
+
+    assert "--dependency" not in cmd
+
+
+def test_config_dependencies_are_installed_in_the_container(tmp_path, env_files, good_model, pip_stub):
+    _, environments = env_files
+    config = write_yaml(tmp_path / "config.yaml", {**CONFIG, "dependencies": ["timm", "einops==0.8.0"]})
+
+    state = run_check(config, *good_model, environments_path=environments)
+
+    assert state["outcome"] == "success"
+    assert pip_stub == [["timm", "einops==0.8.0"]]
+
+
+def test_without_dependencies_nothing_is_installed(env_files, good_model, pip_stub):
+    state = run(env_files, good_model)
+
+    assert state["outcome"] == "success"
+    assert pip_stub == []
 
 
 def test_rerun_clears_managed_files_but_keeps_the_users_own(monkeypatch, tmp_path, env_files, good_model):
@@ -138,7 +164,7 @@ def test_missing_dependency_reaches_the_report(tmp_path, good_model, artifacts, 
 def test_artifact_directory_is_created_before_the_container_runs(monkeypatch, tmp_path, env_files, good_model):
     seen = {}
 
-    def fake(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level):
+    def fake(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level, dependencies):
         seen["exists"] = Path(artifacts_dir).is_dir()
         for name in ("model.pt2", "model.engine"):  # what the kernelgen step waits for
             (Path(artifacts_dir) / name).write_bytes(b"x")
@@ -222,7 +248,7 @@ def test_inner_failure_passes_through_without_a_host_error(monkeypatch, caplog, 
 def test_container_runs_on_cuda(monkeypatch, env_files, good_model):
     seen = {}
 
-    def record(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level):
+    def record(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level, dependencies):
         seen.update(image=image, device=device, precision=precision, threshold=threshold)
         state = eager_check.run(model_path, npz_path, artifacts_dir, precision=precision, threshold=threshold, device="cpu")
         (Path(report_dir) / container.REPORT_FILE).write_text(eager_check.report(state))

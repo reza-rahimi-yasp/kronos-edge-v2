@@ -1,9 +1,16 @@
+import importlib.metadata
 import logging
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
+from conftest import CONFIG, write_yaml
+from kronos_edge import eager_check
 from kronos_edge.workflow import main, route_on_error, run_check
 
 CONV_RELU = """
@@ -80,6 +87,8 @@ def get_inputs():
 """
 
 SYNTAX_ERROR = "def (:\n"
+MISSING_PACKAGE = "import kronos_no_such_package\n" + CONV_RELU
+USES_DEPENDENCY = "import kronos_fake_dependency\n" + CONV_RELU
 
 X = np.zeros((1, 3, 8, 8), dtype=np.float32)
 XY = [np.zeros((2, 3), dtype=np.float32), np.zeros((2, 3), dtype=np.float32)]
@@ -134,6 +143,7 @@ def test_success(tmp_path, caplog, env_files, source, arrays):
         pytest.param(TYPO, [X], "forward", "cannot be run through eager mode", id="forward_typo"),
         pytest.param(None, [X], "import_module", "could not be loaded", id="model_file_missing"),
         pytest.param(SYNTAX_ERROR, [X], "import_module", "could not be loaded", id="syntax_error"),
+        pytest.param(MISSING_PACKAGE, [X], "missing_dependency", "dependencies", id="missing_package"),
         pytest.param(NO_MODEL_CLASS, [X], "find_model_class", "does not define a 'Model' class", id="no_model_class"),
         pytest.param(MODEL_NOT_MODULE, [X], "find_model_class", "does not define a 'Model' class", id="model_not_module"),
         pytest.param(NO_GET_INPUTS, [X], "find_get_inputs", "get_inputs() or get_fwd_args()", id="no_get_inputs"),
@@ -155,6 +165,161 @@ def test_failure(tmp_path, caplog, env_files, source, arrays, stage, fragment):
     records = error_records(caplog)
     assert len(records) == 1
     assert records[0].stage == stage
+
+
+def test_missing_package_names_the_module(tmp_path, env_files):
+    state = run(env_files, write_model(tmp_path, MISSING_PACKAGE), write_npz(tmp_path, [X]))
+
+    assert "kronos_no_such_package" in state["customer_message"]
+    assert "config.yaml" in state["customer_message"]
+
+
+def test_dependencies_are_installed_before_model_py_is_imported(tmp_path, monkeypatch, env_files, pip_stub):
+    """The model may import a package that only exists once pip has run."""
+    config, environments = env_files
+    config = write_yaml(tmp_path / "deps.yaml", {**CONFIG, "dependencies": ["kronos-fake-dependency"]})
+    site = tmp_path / "site"
+    site.mkdir()
+    monkeypatch.syspath_prepend(site)
+
+    def fake_install(packages):
+        pip_stub.append(list(packages))
+        (site / "kronos_fake_dependency.py").write_text("")
+
+    monkeypatch.setattr(eager_check, "install", fake_install)
+
+    state = run_check(config, write_model(tmp_path, USES_DEPENDENCY), write_npz(tmp_path, [X]), environments_path=environments)
+
+    assert state["outcome"] == "success"
+    assert pip_stub == [["kronos-fake-dependency"]]
+
+
+def test_failed_install_is_its_own_stage(tmp_path, caplog, monkeypatch, env_files):
+    config, environments = env_files
+    config = write_yaml(tmp_path / "deps.yaml", {**CONFIG, "dependencies": ["kronos-fake-dependency"]})
+
+    def failing_install(packages):
+        raise RuntimeError("pip exited 1\nERROR: No matching distribution found for kronos-fake-dependency")
+
+    monkeypatch.setattr(eager_check, "install", failing_install)
+
+    state = run_check(config, write_model(tmp_path, CONV_RELU), write_npz(tmp_path, [X]), environments_path=environments)
+
+    assert state["outcome"] == "failure"
+    assert state["error"] == "install_dependencies"
+    assert "could not be installed" in state["customer_message"]
+    assert "No matching distribution" in state["customer_message"]
+    assert [r.stage for r in error_records(caplog)] == ["install_dependencies"]
+
+
+def constraints_in(cmd):
+    """The pins pip was handed through --constraint, as {name: version}; read while the file still exists."""
+    lines = Path(cmd[cmd.index("--constraint") + 1]).read_text().splitlines()
+    return dict(line.split("==") for line in lines)
+
+
+def resolving_pip(requires):
+    """A pip that honors --constraint the way the real resolver does.
+
+    ``requires`` is what the requested package pulls in transitively. A requirement that disagrees with a pin
+    is a conflict and installs nothing; without a pin it installs, replacing whatever was there (recorded).
+    """
+    replaced = []
+
+    def fake_run(cmd, **kwargs):
+        pins = constraints_in(cmd) if "--constraint" in cmd else {}
+        for name, version in requires.items():
+            if name in pins and pins[name] != version:
+                stderr = (
+                    "ERROR: Cannot install kronos-fake-dependency because these package versions have conflicting "
+                    f"dependencies.\nThe user requested (constraint) {name}=={pins[name]}\n"
+                    f"kronos-fake-dependency 1.0 depends on {name}=={version}\n"
+                )
+                return subprocess.CompletedProcess(cmd, 1, stdout="", stderr=stderr)
+            replaced.append(f"{name}=={version}")
+        return subprocess.CompletedProcess(cmd, 0, stdout="Successfully installed kronos-fake-dependency", stderr="")
+
+    return fake_run, replaced
+
+
+def test_install_runs_pip_in_this_interpreter(monkeypatch, pip_stub):
+    """The real worker: pip of the container's venv, output captured so stdout stays the user's."""
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"], seen["kwargs"] = cmd, kwargs
+        return subprocess.CompletedProcess(cmd, 0, stdout="Successfully installed timm", stderr="")
+
+    monkeypatch.setattr(eager_check.subprocess, "run", fake_run)
+
+    pip_stub.real(["timm", "einops==0.8.0"])
+
+    assert seen["cmd"][:5] == [sys.executable, "-m", "pip", "install", "--no-cache-dir"]
+    assert seen["cmd"][5] == "--constraint"
+    assert seen["cmd"][7:] == ["timm", "einops==0.8.0"]
+    assert seen["kwargs"].get("capture_output") is True
+
+
+def test_install_pins_every_runtime_package(monkeypatch, pip_stub):
+    """pip is constrained to the venv as it is, torch with its build label included, so none of it can be replaced."""
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["path"], seen["pins"] = cmd[cmd.index("--constraint") + 1], constraints_in(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(eager_check.subprocess, "run", fake_run)
+
+    pip_stub.real(["timm"])
+
+    assert seen["pins"]["torch"] == torch.__version__  # 2.x+cpu here, 2.x+cu130 in the image
+    assert seen["pins"] == {d.metadata["Name"]: d.version for d in importlib.metadata.distributions()}
+    assert not Path(seen["path"]).exists()
+
+
+def test_transitive_dependency_that_would_replace_the_runtime_fails_at_install_dependencies(
+    tmp_path, caplog, monkeypatch, env_files, pip_stub
+):
+    """A requirement the user's package pulls in must not replace torch or anything else the image carries:
+    the install is pinned to the venv's versions, so pip reports the conflict and installs nothing."""
+    config, environments = env_files
+    config = write_yaml(tmp_path / "deps.yaml", {**CONFIG, "dependencies": ["kronos-fake-dependency"]})
+    fake_pip, replaced = resolving_pip({"torch": "99.0.0"})
+    monkeypatch.setattr(eager_check.subprocess, "run", fake_pip)
+    monkeypatch.setattr(eager_check, "install", pip_stub.real)
+
+    state = run_check(config, write_model(tmp_path, CONV_RELU), write_npz(tmp_path, [X]), environments_path=environments)
+
+    assert replaced == []
+    assert state["outcome"] == "failure"
+    assert state["error"] == "install_dependencies"
+    assert "torch==99.0.0" in state["customer_message"]
+    assert f"torch=={torch.__version__}" in state["customer_message"]
+    assert [r.stage for r in error_records(caplog)] == ["install_dependencies"]
+
+
+def test_dependency_compatible_with_the_runtime_installs_under_the_pins(tmp_path, monkeypatch, env_files, pip_stub):
+    """The pins only forbid replacing the runtime: a package that needs the installed torch still installs."""
+    config, environments = env_files
+    config = write_yaml(tmp_path / "deps.yaml", {**CONFIG, "dependencies": ["kronos-fake-dependency"]})
+    fake_pip, replaced = resolving_pip({"torch": torch.__version__})
+    monkeypatch.setattr(eager_check.subprocess, "run", fake_pip)
+    monkeypatch.setattr(eager_check, "install", pip_stub.real)
+
+    state = run_check(config, write_model(tmp_path, CONV_RELU), write_npz(tmp_path, [X]), environments_path=environments)
+
+    assert state["outcome"] == "success"
+    assert replaced == [f"torch=={torch.__version__}"]
+
+
+def test_install_failure_carries_pips_output(monkeypatch, pip_stub):
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="ERROR: No matching distribution found for nope")
+
+    monkeypatch.setattr(eager_check.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="No matching distribution"):
+        pip_stub.real(["nope"])
 
 
 def test_forward_failure_includes_exception_text(tmp_path, env_files):

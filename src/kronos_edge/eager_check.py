@@ -5,12 +5,20 @@ model.py must define ``Model`` (a torch.nn.Module subclass) and
 ``get_init_inputs()`` is optional and supplies constructor arguments.
 input.npz holds one array per reference input under ``arr_0 .. arr_n-1``,
 which is what ``np.savez("input.npz", *arrays)`` writes.
+Packages model.py needs beyond the image arrive as ``--dependency`` and are
+pip-installed into this container before model.py is imported, pinned to the
+versions already in the venv so they cannot replace the image's packages.
 """
 
 import argparse
+import importlib.metadata
 import importlib.util
 import inspect
 import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -31,6 +39,38 @@ INPUT_NAMES = ("get_inputs", "get_fwd_args")
 
 class InvalidUserInputs(ValueError):
     """input.npz does not match the reference inputs from get_inputs()."""
+
+
+class MissingDependency(ImportError):
+    """model.py imports a package the environment does not have."""
+
+
+def installed_versions() -> list[str]:
+    """Every distribution in this interpreter as ``name==version``: the validated runtime, torch's build label included."""
+    pins = {}
+    for dist in importlib.metadata.distributions():
+        name = dist.metadata["Name"]
+        if name and name.lower() not in pins:  # first on sys.path is what imports resolve to
+            pins[name.lower()] = f"{name}=={dist.version}"
+    return sorted(pins.values(), key=str.lower)
+
+
+def install(packages: list[str]) -> None:
+    """pip install into this container's venv. Output is captured: stdout belongs to the user's model.
+
+    Every package already in the venv is passed as a pip constraint, so a requirement, direct or transitive,
+    that would replace torch or another image package is a resolver conflict and nothing is installed.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        constraints = Path(tmp) / "constraints.txt"
+        constraints.write_text("".join(f"{pin}\n" for pin in installed_versions()))
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--no-cache-dir", "--constraint", str(constraints), *packages],
+            capture_output=True, text=True,
+        )
+    if result.returncode != 0:
+        raise RuntimeError(f"pip exited {result.returncode}\n{result.stdout}{result.stderr}".rstrip())
+    logger.debug("%s", result.stdout.rstrip(), extra={"stage": "install_dependencies"})
 
 
 def _import_module(path: str):
@@ -60,9 +100,19 @@ def load_model(state: State) -> State:
             raise RuntimeError(f"device {device} requested but torch.cuda.is_available() is False")
         logger.info("device %s", device, extra={"stage": stage})
 
+        stage = "install_dependencies"
+        dependencies = list(state.get("dependencies", ()))
+        if dependencies:
+            logger.info("installing %s", ", ".join(dependencies), extra={"stage": stage})
+            install(dependencies)
+
         stage = "import_module"
         logger.info("loading %s", state["model_path"], extra={"stage": stage})
-        module = _import_module(state["model_path"])
+        try:
+            module = _import_module(state["model_path"])
+        except ModuleNotFoundError as exc:
+            stage = "missing_dependency"
+            raise MissingDependency(f"model.py imports {exc.name!r}, which is not installed in the environment") from exc
 
         stage = "find_model_class"
         model_cls = getattr(module, "Model", None)
@@ -153,12 +203,13 @@ def build_graph():
 
 
 def run(
-    model_path, npz_path, artifacts_dir, precision: str = "fp32", threshold: float = 0.99, device: str = "cpu"
+    model_path, npz_path, artifacts_dir, precision: str = "fp32", threshold: float = 0.99, device: str = "cpu",
+    dependencies: list[str] = (),
 ) -> State:
     return build_graph().invoke(
         {
             "model_path": str(model_path), "npz_path": str(npz_path), "artifacts_dir": str(artifacts_dir),
-            "precision": precision, "threshold": threshold, "device": device,
+            "precision": precision, "threshold": threshold, "device": device, "dependencies": list(dependencies),
         }
     )
 
@@ -180,11 +231,15 @@ def main(argv=None) -> int:
     parser.add_argument("--threshold", required=True, type=float, help="minimum metric value for every output")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--log-level", default="INFO")
+    parser.add_argument(
+        "--dependency", action="append", default=[], metavar="REQUIREMENT",
+        help="pip requirement to install before importing model.py; repeatable",
+    )
     args = parser.parse_args(argv)
     configure(args.log_level)
     state = run(
         args.model_path, args.npz_path, args.artifacts,
-        precision=args.precision, threshold=args.threshold, device=args.device,
+        precision=args.precision, threshold=args.threshold, device=args.device, dependencies=args.dependency,
     )
     with open(args.report, "w") as f:
         f.write(report(state))

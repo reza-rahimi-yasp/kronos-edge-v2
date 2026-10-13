@@ -53,7 +53,7 @@ class Report(BaseModel):
 
 def build_command(
     image: str, model_path, npz_path, report_dir, artifacts_dir, precision: str, threshold: float, device: str,
-    log_level: str,
+    log_level: str, dependencies: list[str],
 ) -> list[str]:
     return [
         "docker", "run", "--rm", "--gpus", "all",
@@ -65,16 +65,19 @@ def build_command(
         "python", "-m", "kronos_edge.eager_check", "/work/model.py", "/work/input.npz",
         "--report", f"/work/out/{REPORT_FILE}", "--artifacts", "/work/artifact",
         "--precision", precision, "--threshold", str(threshold), "--device", device, "--log-level", log_level,
+        *[arg for package in dependencies for arg in ("--dependency", package)],
     ]
 
 
 def run_container(
     image: str, model_path, npz_path, report_dir, artifacts_dir, precision: str, threshold: float, device: str,
-    log_level: str,
+    log_level: str, dependencies: list[str],
 ) -> int:
     """Run the container with stdout and stderr inherited; return its exit code."""
     return subprocess.run(
-        build_command(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level)
+        build_command(
+            image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level, dependencies
+        )
     ).returncode
 
 
@@ -109,7 +112,7 @@ def run_in_container(state: State) -> State:
         with tempfile.TemporaryDirectory() as report_dir:
             code = run_container(
                 image, state["model_path"], state["npz_path"], report_dir, artifacts, config.precision,
-                config.threshold, DEVICE, state.get("log_level", "INFO"),
+                config.threshold, DEVICE, state.get("log_level", "INFO"), config.dependencies,
             )
             report = _read_report(report_dir, code)
     except Exception as exc:
