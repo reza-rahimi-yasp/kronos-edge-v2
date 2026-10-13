@@ -6,15 +6,19 @@ model.py must define ``Model`` (a torch.nn.Module subclass) and
 input.npz holds one array per reference input under ``arr_0 .. arr_n-1``,
 which is what ``np.savez("input.npz", *arrays)`` writes.
 Packages model.py needs beyond the image arrive as ``--dependency`` and are
-pip-installed into this container before model.py is imported.
+pip-installed into this container before model.py is imported, pinned to the
+versions already in the venv so they cannot replace the image's packages.
 """
 
 import argparse
+import importlib.metadata
 import importlib.util
 import inspect
 import json
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -41,11 +45,29 @@ class MissingDependency(ImportError):
     """model.py imports a package the environment does not have."""
 
 
+def installed_versions() -> list[str]:
+    """Every distribution in this interpreter as ``name==version``: the validated runtime, torch's build label included."""
+    pins = {}
+    for dist in importlib.metadata.distributions():
+        name = dist.metadata["Name"]
+        if name and name.lower() not in pins:  # first on sys.path is what imports resolve to
+            pins[name.lower()] = f"{name}=={dist.version}"
+    return sorted(pins.values(), key=str.lower)
+
+
 def install(packages: list[str]) -> None:
-    """pip install into this container's venv. Output is captured: stdout belongs to the user's model."""
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--no-cache-dir", *packages], capture_output=True, text=True
-    )
+    """pip install into this container's venv. Output is captured: stdout belongs to the user's model.
+
+    Every package already in the venv is passed as a pip constraint, so a requirement, direct or transitive,
+    that would replace torch or another image package is a resolver conflict and nothing is installed.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        constraints = Path(tmp) / "constraints.txt"
+        constraints.write_text("".join(f"{pin}\n" for pin in installed_versions()))
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--no-cache-dir", "--constraint", str(constraints), *packages],
+            capture_output=True, text=True,
+        )
     if result.returncode != 0:
         raise RuntimeError(f"pip exited {result.returncode}\n{result.stdout}{result.stderr}".rstrip())
     logger.debug("%s", result.stdout.rstrip(), extra={"stage": "install_dependencies"})

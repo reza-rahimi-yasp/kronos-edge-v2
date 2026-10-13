@@ -115,7 +115,11 @@ image does not carry, as pip requirements (`timm`, `einops==0.8.0`). They
 are installed inside the container at the start of every run, before
 `model.py` is imported, and are never baked into the image; the image resolves
 them against the same package index as its torch build, so a package with
-CUDA builds matches the environment. Leave the field out when your model needs
+CUDA builds matches the environment. The install is pinned to the versions the
+image already carries, so a requirement that would replace torch or another
+package of the environment, whether listed here or pulled in by a listed
+package, fails the install instead of changing the environment the checks were
+validated in. Leave the field out when your model needs
 only torch. If `model.py` imports a package that is not installed, the check
 stops before anything runs and names the module, so add the package that
 provides it here. The install adds to each run's time.
@@ -273,7 +277,7 @@ and dtype of every input, `DEBUG` adds the full traceback of a failure.
 | The Docker image for the requested environment is not built. | Run the `docker build` command shown in the detail line. |
 | The check could not be run in the environment container. Contact support. | `docker run` failed before the check could report. |
 | The GPU could not be accessed inside the environment container. Contact support. | The container started but torch could not see the GPU. |
-| A package listed under dependencies in config.yaml could not be installed. pip's output is below. | Check the requirement's spelling and version against the index; the detail shows what pip printed. |
+| A package listed under dependencies in config.yaml could not be installed, or would replace a package the environment image carries. pip's output is below. | Check the requirement's spelling and version against the index, or, if pip reports a conflict with a constraint, pick a version of the package that works with the environment's torch; the detail shows what pip printed. |
 | model.py could not be loaded. | Fix the syntax or import error shown below it, or check the path. |
 | model.py imports a package that is not installed in the environment. Add the package that provides it to dependencies in config.yaml. | The detail names the module `model.py` could not import. Add the pip package that provides it (for `PIL`, that is `pillow`) to `dependencies`. |
 | model.py does not define a 'Model' class. | Add a `Model` class that subclasses `torch.nn.Module`. |

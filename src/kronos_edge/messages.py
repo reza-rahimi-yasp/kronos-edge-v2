@@ -32,7 +32,7 @@ CONTAINER = {
 
 EAGER = {
     "select_device": "The GPU could not be accessed inside the environment container. Contact support.",
-    "install_dependencies": "A package listed under dependencies in config.yaml could not be installed. pip's output is below.",
+    "install_dependencies": "A package listed under dependencies in config.yaml could not be installed, or would replace a package the environment image carries. pip's output is below.",
     "import_module": "model.py could not be loaded.",
     "missing_dependency": "model.py imports a package that is not installed in the environment. Add the package that provides it to dependencies in config.yaml.",
     "find_model_class": "model.py does not define a 'Model' class.",

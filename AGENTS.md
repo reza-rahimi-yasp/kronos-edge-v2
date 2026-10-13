@@ -45,7 +45,12 @@ decisions: do not add file listings, commands, or summaries here.
   before `model.py` is imported; they are never added to a Dockerfile or
   committed to an image, so the image stays the registry entry's versions and
   nothing else. The image sets `PIP_EXTRA_INDEX_URL` to its torch index so
-  CUDA-built packages resolve to the image's CUDA. A `ModuleNotFoundError`
+  CUDA-built packages resolve to the image's CUDA. The install is constrained
+  to every distribution already in the venv, torch's CUDA build included, so
+  a requirement, direct or transitive, that would replace an image package is
+  a resolver conflict reported at `install_dependencies` and nothing is
+  installed: the environment the checks run in stays the one that was
+  validated. A `ModuleNotFoundError`
   while importing `model.py` is its own stage, `missing_dependency`, naming
   the module, so the user learns which package to declare.
 - Precision is applied once, at the ONNX export, by casting a copy of the

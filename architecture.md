@@ -98,7 +98,8 @@ Run by `python -m kronos_edge.eager_check` with `--device cuda` and the
 `--precision`, `--threshold`, and `--dependency` values from the config.
 
 - `load_model` (`eager_check.py`): selects the device, pip-installs the
-  config's `dependencies` into the container's venv (output captured, so
+  config's `dependencies` into the container's venv under a constraints file
+  pinning every distribution already there (output captured, so
   stdout stays the user's), imports `model.py`, finds `Model` and
   `get_inputs()` or `get_fwd_args()`, and constructs the model. An import that
   raises `ModuleNotFoundError` is reported as `missing_dependency` with the
