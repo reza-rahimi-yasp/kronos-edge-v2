@@ -32,6 +32,22 @@ decisions: do not add file listings, commands, or summaries here.
   name. The kernel must pass
   the evaluator's correctness checks; its speedup is reported, not judged, and
   no expectation is derived from TensorRT versus the eager run.
+- A job routed to an evaluator that is not registered waits forever, so the
+  host checks before kernelgen: `yasp-toolkit eval workers` filtered by
+  `eval_routing`, matched exactly on the config's `gpu` and `eval_routing`
+  (the listing's table is parsed; the toolkit has no machine-readable
+  output). When nothing matches, the host starts `yasp-eval register --tag
+  routing=<key>` as a subprocess, the same boundary as the toolkit: the
+  command reads the user's key itself, the host imports nothing from yasp,
+  and no credential enters a container. `yasp-eval` comes from
+  `yasp-compile-eval`, declared in `requirements.txt`; `nvcc` on the path is
+  the user's environment, since `yasp-eval register` detects the GPU and the
+  build toolchain itself and refuses to register without them, which is why
+  its `--gpu-name` is never overridden. Readiness is the listing again,
+  polled for a bounded time. The process the host started is the only one it
+  stops: it is recorded in state, every path from `ensure_evaluator` on runs
+  `release_evaluator`, and an evaluator found already registered is never
+  touched. A stop failure never replaces the failure that led to it.
 - `config.yaml` has two kinds of fields. The five environment fields must
   equal a registry entry and select the image. Settings (`precision`,
   `metric`, `threshold`) are validated by the same schema but never take part

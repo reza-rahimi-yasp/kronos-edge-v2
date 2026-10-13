@@ -9,20 +9,22 @@ inputs against the model's own reference inputs, runs one forward pass,
 exports the model with `torch.export` as the reference for kernelgen, exports
 it to ONNX with the dynamo exporter, simplifies the ONNX with onnxsim, builds
 a TensorRT engine at the precision you ask for, benchmarks the engine against
-eager mode, and checks their outputs agree. Back on this machine it then asks
-yasp kernelgen for an optimized kernel of the model and scores that kernel on
-this machine's evaluator, and prints either the benchmark result and the
-kernelgen speedup or a message saying what to fix. The reference, the ONNX
+eager mode, and checks their outputs agree. Back on this machine it then makes
+sure an evaluator for your GPU and routing key is registered, starting one on
+this machine when none is, asks yasp kernelgen for an optimized kernel of the
+model, scores that kernel on that evaluator, and prints either the benchmark
+result and the kernelgen speedup or a message saying what to fix. The reference, the ONNX
 files, the engine, the benchmark numbers, the kernel, and the evaluation
 reports land in an artifact directory.
 
 ## Requirements
 
 - Python 3.12 or newer
-- The packages in `requirements.txt` (`langgraph`, `numpy`, `onnx`, `onnxscript`, `onnxsim`, `pydantic`, `pyyaml`, `torch`, `yasp-agent[gaia]`)
+- The packages in `requirements.txt` (`langgraph`, `numpy`, `onnx`, `onnxscript`, `onnxsim`, `pydantic`, `pyyaml`, `torch`, `yasp-agent[gaia]`, `yasp-compile-eval`)
 - Docker with the NVIDIA container runtime, and `nvidia-smi` on the path
-- A Yasp API key for the kernelgen steps, and an evaluator registered from this
-  machine (see below)
+- A Yasp API key for the kernelgen steps (see below)
+- The CUDA toolkit's `nvcc` on the path, for the evaluator the check starts on
+  this machine when none is registered (see below)
 
 ## Install
 
@@ -33,9 +35,10 @@ python -m venv .venv
     --trusted-host nexus.yasp.localdomain
 ```
 
-`yasp-agent` is published on the yasp package index, not on PyPI, so the
-extra index is needed. It installs the `yasp-toolkit` command the kernelgen
-steps run.
+`yasp-agent` and `yasp-compile-eval` are published on the yasp package index,
+not on PyPI, so the extra index is needed. They install the `yasp-toolkit`
+command the kernelgen steps run and the `yasp-eval` command that serves as the
+evaluator.
 
 The package lives under `src/`, so set `PYTHONPATH=src` when running it from
 a checkout. The examples below do that.
@@ -54,11 +57,18 @@ export YASP_API_KEY=...            # the variable yasp-toolkit reads
 file: if you keep the key in one, load it yourself (`set -a; . ./.env; set +a`)
 and never commit it. `.env` is gitignored.
 
-The kernelgen evaluation runs on this machine, on the evaluator you
-registered from it (`yasp-eval register --tag routing=<key>`); the evaluator
-advertises the GPU name `nvidia-smi` reports, which is the `gpu` of your
-config. Put that routing key in the config (`eval_routing`, below): it is
-required, so the evaluation is always pinned to your evaluator.
+The kernelgen evaluation runs on an evaluator registered under the routing
+key of your config (`eval_routing`, below) and advertising your config's
+`gpu`. Before kernelgen, the check lists the evaluators registered under that
+key (`yasp-toolkit eval workers`). If one advertises your `gpu`, it is used
+and left as it is. Otherwise the check starts one on this machine with
+`yasp-eval register --tag routing=<key>`, which reads the same API key,
+detects the GPU and the CUDA build toolchain (`nvcc` must be on the path),
+and registers; the check waits up to two minutes for it to be listed and
+stops it when the check ends, whether it succeeded or failed. The evaluator's
+own output is kept out of the check's output and shown only if it exits
+before registering. The routing key is required, so the evaluation is always
+pinned to that evaluator.
 
 ## Prepare your config file
 
@@ -103,12 +113,14 @@ strongly typed engine, so the engine computes in exactly the types the ONNX
 carries. Changing `precision` and running again rewrites all the files in the
 same artifact directory.
 
-`eval_routing` is also a setting. It is the routing key of the evaluator
-registered from this machine; kernelgen's in-compile evaluations and the
-final evaluation are pinned to it. It is required: without it any evaluator
-advertising your config's `gpu` could take the job, and the check must
-evaluate on this machine, so a config that omits it is rejected before any
-job is submitted.
+`eval_routing` is also a setting. It is the routing key the kernelgen
+evaluations are pinned to: kernelgen's in-compile evaluations and the final
+evaluation go to the evaluator registered under it that advertises your
+`gpu`, which the check starts on this machine when there is none. Pick a key
+of your own, so a job never lands on someone else's evaluator. It is required:
+without it any evaluator advertising your config's `gpu` could take the job,
+and the check must evaluate on this machine, so a config that omits it is
+rejected before any job is submitted.
 
 `dependencies` lists the packages `model.py` imports that the environment
 image does not carry, as pip requirements (`timm`, `einops==0.8.0`). They
@@ -218,7 +230,10 @@ values as a shape, for example `x.reshape(shape.tolist())`, the engine is
 built for exactly the values in your `input.npz`. Engine builds take seconds
 for small models and can take minutes for large ones; there is no timeout.
 
-Once the container has produced the reference and the engine, the check runs
+Once the container has produced the reference and the engine, the check makes
+sure an evaluator for your `gpu` and `eval_routing` is registered, starting
+`yasp-eval register` on this machine when none is (see "Set up your Yasp API
+key"). It then runs
 `yasp-toolkit kernelgen compile` on this machine with your `model.py` as the
 source and your config's `gpu` as the target, and waits for the kernelgen
 job; the optimized kernel is written as `kernel.py`. It then runs
@@ -226,7 +241,8 @@ job; the optimized kernel is written as `kernel.py`. It then runs
 this machine's evaluator. The kernel must pass the evaluator's correctness
 checks; the speedup the evaluator measured is printed, and no expectation is
 derived from the TensorRT engine or the eager run. Kernelgen jobs take
-minutes; the toolkit's progress goes to the log.
+minutes; the toolkit's progress goes to the log. An evaluator the check
+started is stopped once the evaluation is over, or as soon as a step fails.
 
 ## Artifact directory
 
@@ -311,8 +327,13 @@ and dtype of every input, `DEBUG` adds the full traceback of a failure.
 | The TensorRT engine (model.engine) kernelgen waits for is missing from the artifact directory. Contact support. | The container reported success without writing the engine. |
 | The yasp-toolkit command is not available. Install yasp-agent[gaia] into the environment that runs the check. | Install the packages in `requirements.txt` with the yasp index. |
 | No Yasp API key was found, or the key was not accepted. Export a valid YASP_API_KEY (see .env.example) or store one with `yasp-toolkit keyring set`. | See "Set up your Yasp API key". If a key is set, the service rejected it: create a new one. |
+| The evaluators registered for the kernelgen evaluation could not be listed. The toolkit's output is below. | The service could not be reached or rejected the request; the detail shows the toolkit's output. |
+| The yasp-eval command is not available. Install yasp-compile-eval into the environment that runs the check. | Install the packages in `requirements.txt` with the yasp index. |
+| No evaluator for your config's gpu and eval_routing is registered, and the one started on this machine exited before registering. Its output is below. | The detail shows what `yasp-eval register` printed: typically a missing `nvcc` on the path, or the service being unreachable. |
+| No evaluator for your config's gpu and eval_routing is registered, and the one started on this machine did not register in time. Check the gpu it advertises and that the service is reachable. | The evaluator ran for two minutes without being listed for your `gpu` and `eval_routing`. The detail names both. |
+| The evaluator started on this machine for the kernelgen evaluation could not be stopped. Stop the yasp-eval process yourself. | Find the `yasp-eval register` process and stop it; the detail shows the OS error. |
 | The kernelgen optimization did not produce a kernel. The toolkit's output is below. | The kernelgen job failed or the service could not be reached; the detail shows the toolkit's output, including the task id. |
-| The kernelgen kernel could not be evaluated on this machine. The toolkit's output is below. | The evaluation task failed or no evaluator took it; check `eval_routing` and that your evaluator is registered. |
+| The kernelgen kernel could not be evaluated on this machine. The toolkit's output is below. | The evaluation task failed, or the evaluator dropped out after the check found it registered; the detail shows the toolkit's output. |
 | The evaluator's results for the kernelgen kernel could not be read. Contact support. | Not something you can fix from the model. |
 | The kernelgen kernel failed the evaluation on this machine: it did not build or did not match your model. The evaluator's report is below. Contact support. | The detail names the failed checks and what the evaluator captured. |
 
