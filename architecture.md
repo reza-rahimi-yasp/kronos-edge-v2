@@ -7,9 +7,10 @@ container graph writes `report.json` to a directory the host mounted; the host
 merges it into its own state, so `failure` picks the customer message the
 same way for both graphs. Once the container has succeeded, the host makes
 sure an evaluator for the config's GPU and routing key is registered, starting
-`yasp-eval register` on this machine when none is, then runs the kernelgen
-steps through the `yasp-toolkit` command; both commands need the user's Yasp
-API key and so stay on the host. An evaluator the host started is stopped on
+a Gaia worker container on this machine when none is, then runs the kernelgen
+steps through the host's `yasp-toolkit` command. The user's Yasp API key stays
+on the host; only a registration key scoped to registering enters the Gaia
+worker, and the model-check container receives neither. A worker the host started is removed on
 every path out of the kernelgen steps. The files the checks produce for the
 user go to the artifact directory, which the host creates and mounts; the
 container's `model.pt2` and `model.engine` in it are what the host's
@@ -82,13 +83,22 @@ first, which keeps the error it was given.
 - `ensure_evaluator` (`evaluator_check.py`): runs `yasp-toolkit eval workers`
   filtered by the config's `eval_routing` and looks for a row whose GPU name
   and routing equal the config's `gpu` and `eval_routing` exactly. If there is
-  none, starts `yasp-eval register --tag routing=<eval_routing>` as a host
-  subprocess (output captured to a temporary file; the GPU name is not
-  overridden, so the command's own hardware and toolchain detection applies),
-  records it in `evaluator`, and polls the listing until the row appears or a
-  bounded time passes; a process that exits meanwhile fails with its output.
-  An evaluator that was already registered is not recorded. Stages:
-  `evaluator_inventory`, `evaluator_command`, `evaluator_start`,
+  none, mints scoped keys with `yasp-toolkit registry key` and `yasp-toolkit
+  eval key` (their output is never logged), reads the worker image's tag
+  list from `docker.yasp.ai` with the registry key and picks the newest
+  release, logs in and pulls under a temporary Docker config, and runs
+  `docker create` for a uniquely named `kronos-eval-*` container with the
+  NVIDIA runtime, the Docker socket, the sibling-task settings of the Gaia
+  Docker guide, and the registration key taken from the create client's
+  environment. The container's command is `yasp-eval register --tag
+  routing=<eval_routing>`, the image's own executable; the GPU name is not
+  overridden. `docker start --attach` runs as a host subprocess whose output,
+  the worker's, is captured to a temporary file. It records the container in
+  `evaluator` and polls the listing until the row appears or a bounded time
+  passes; an attached client that exits meanwhile fails with the output. A
+  failure after `docker create` removes the container by name before the
+  failure propagates. An evaluator that was already registered is not
+  recorded. Stages: `evaluator_inventory`, `evaluator_command`, `evaluator_start`,
   `evaluator_ready` (plus the toolkit and credentials stages of kernelgen).
 - `kernelgen` (`kernelgen_check.py`): requires `model.pt2` and `model.engine`
   in the artifact directory (the TensorRT output it waits for), then runs
@@ -107,11 +117,12 @@ first, which keeps the error it was given.
   `kernelgen_result` and `kernelgen_speedup`. Stages: `kernelgen_eval`,
   `kernelgen_eval_results`, `kernelgen_eval_incorrect` (plus the toolkit and
   credentials stages above).
-- `release_evaluator` (`evaluator_check.py`): terminates the process in
-  `evaluator`, if any, killing it if it does not exit in time, and clears the
-  key. Reached from every outcome of `ensure_evaluator`, `kernelgen`, and
-  `evaluate_kernelgen`, so an evaluator the host started never outlives the
-  check and one it did not start is never touched. A failure to stop is the
+- `release_evaluator` (`evaluator_check.py`): removes the container named in
+  `evaluator`, if any, with `docker rm --force` (one already gone counts as
+  removed), reaps the attached client, killing it if it does not exit, and
+  clears the key. Reached from every outcome of `ensure_evaluator`,
+  `kernelgen`, and `evaluate_kernelgen`, so a worker the host started never
+  outlives the check and one it did not start is never touched. A failure to remove is the
   stage `evaluator_release` only when no earlier failure is in state;
   otherwise it is logged and the earlier failure is kept.
 - `success` / `failure` (`workflow.py`): set `outcome` and the
