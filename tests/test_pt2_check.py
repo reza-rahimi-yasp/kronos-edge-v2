@@ -2,6 +2,7 @@
 
 import json
 import zipfile
+from pathlib import Path
 
 import torch
 
@@ -10,9 +11,9 @@ from test_eager_check import CONV_RELU, X, error_records, run, write_model, writ
 from test_onnx_check import DATA_DEPENDENT
 
 
-def test_pt2_is_written_right_after_the_eager_run_and_before_onnx(tmp_path, monkeypatch, env_files):
+def test_pt2_is_written_right_after_the_eager_run_and_before_onnx(tmp_path, monkeypatch, env_files, official_exporter):
     order = []
-    real_pt2_export, real_onnx_export = pt2_check.export, onnx_check.export
+    real_pt2_export, real_onnx_export = official_exporter.export, onnx_check.export
 
     def pt2_export(model, inputs):
         order.append("pt2")
@@ -23,7 +24,7 @@ def test_pt2_is_written_right_after_the_eager_run_and_before_onnx(tmp_path, monk
         assert (tmp_path / ".artifact" / "model.pt2").is_file(), "the reference must exist before the ONNX export starts"
         return real_onnx_export(model, inputs)
 
-    monkeypatch.setattr(pt2_check, "export", pt2_export)
+    monkeypatch.setattr(official_exporter, "export", pt2_export)
     monkeypatch.setattr(onnx_check, "export", onnx_export)
 
     state = run(env_files, write_model(tmp_path, CONV_RELU), write_npz(tmp_path, [X]))
@@ -32,11 +33,11 @@ def test_pt2_is_written_right_after_the_eager_run_and_before_onnx(tmp_path, monk
     assert order == ["pt2", "onnx"]
 
 
-def test_pt2_failure_stops_before_the_onnx_export(tmp_path, monkeypatch, caplog, env_files):
+def test_pt2_failure_stops_before_the_onnx_export(tmp_path, monkeypatch, caplog, env_files, official_exporter):
     def refuse(model, inputs):
         raise RuntimeError("torch.export refused this model")
 
-    monkeypatch.setattr(pt2_check, "export", refuse)
+    monkeypatch.setattr(official_exporter, "export", refuse)
     monkeypatch.setattr(onnx_check, "export", lambda model, inputs: (_ for _ in ()).throw(AssertionError("onnx export must not run")))
 
     state = run(env_files, write_model(tmp_path, CONV_RELU), write_npz(tmp_path, [X]))
@@ -81,11 +82,11 @@ def test_untraceable_model_is_named_with_its_cause(tmp_path, caplog, env_files):
     assert [r.stage for r in error_records(caplog)] == ["pt2_capture"]
 
 
-def test_unwritable_pt2_is_the_save_stage(monkeypatch, caplog, good_model, artifacts):
+def test_unwritable_pt2_is_the_save_stage(monkeypatch, caplog, good_model, artifacts, official_exporter):
     def cannot_save(program, path):
         raise OSError(f"cannot write {path}")
 
-    monkeypatch.setattr(pt2_check, "save", cannot_save)
+    monkeypatch.setattr(official_exporter, "save", cannot_save)
 
     state = eager_check.run(*good_model, artifacts, device="cpu")
 
@@ -98,22 +99,31 @@ def tensors_of(model, inputs):
     return [*model.parameters(), *model.buffers(), *inputs]
 
 
-def test_reference_is_traced_from_cpu_copies_that_leave_the_eager_model_and_inputs_alone(monkeypatch, good_model, artifacts):
-    """A GPU-traced reference failed to load on the kernelgen service as it does on a torch built without CUDA, so
-    the trace runs on independent CPU copies: the eager model and the user's inputs in state keep their objects,
-    storage, values, dtypes, and mode."""
+def test_reference_is_produced_by_the_official_exporter_on_cpu_copies(monkeypatch, good_model, artifacts, official_exporter):
+    """The reference is yasp's own export (`yasp.compile.common.exporter`, what `yasp-toolkit kernelgen export`
+    runs), on independent CPU copies: a GPU-traced reference failed to load on the kernelgen service as it does on
+    a torch built without CUDA, and the eager model and the user's inputs in state keep their objects, storage,
+    values, dtypes, and mode."""
     received = {}
-    real_export = pt2_check.export
+    real_export, real_save = official_exporter.export, official_exporter.save
 
-    def export(model, inputs):
+    def export(model, inputs, *args, **kwargs):
         received["model"], received["inputs"] = model, inputs
-        return real_export(model, inputs)
+        received["program"] = real_export(model, inputs, *args, **kwargs)
+        return received["program"]
 
-    monkeypatch.setattr(pt2_check, "export", export)
+    def save(program, path):
+        received["saved"] = (program, Path(path))
+        real_save(program, path)
+
+    monkeypatch.setattr(official_exporter, "export", export)
+    monkeypatch.setattr(official_exporter, "save", save)
 
     state = eager_check.run(*good_model, artifacts, device="cpu")
 
     assert state.get("error") is None
+    assert received["saved"] == (received["program"], artifacts / "model.pt2")
+    assert state["exported_program"] is received["program"]
     model, inputs = received["model"], received["inputs"]
     assert model is not state["model"]
     assert all(t.device.type == "cpu" for t in tensors_of(model, inputs))
@@ -128,8 +138,8 @@ def test_reference_is_traced_from_cpu_copies_that_leave_the_eager_model_and_inpu
         torch.testing.assert_close(copied, original)
 
 
-def test_a_trace_that_writes_to_its_model_or_inputs_cannot_reach_the_eager_ones(monkeypatch, good_model, artifacts):
-    real_export = pt2_check.export
+def test_a_trace_that_writes_to_its_model_or_inputs_cannot_reach_the_eager_ones(monkeypatch, good_model, artifacts, official_exporter):
+    real_export = official_exporter.export
 
     def export(model, inputs):
         with torch.no_grad():
@@ -137,7 +147,7 @@ def test_a_trace_that_writes_to_its_model_or_inputs_cannot_reach_the_eager_ones(
                 t.fill_(7.0)
         return real_export(model, inputs)
 
-    monkeypatch.setattr(pt2_check, "export", export)
+    monkeypatch.setattr(official_exporter, "export", export)
 
     state = eager_check.run(*good_model, artifacts, device="cpu")
 
@@ -200,3 +210,19 @@ def test_saved_reference_records_only_cpu_devices(good_model, artifacts):
 
     assert state.get("error") is None
     assert archive_devices(artifacts / "model.pt2") == {"cpu"}
+
+
+def test_missing_exporter_package_is_the_pt2_exporter_stage(monkeypatch, caplog, good_model, artifacts):
+    """yasp-compile-common is imported in the node, so an image without it reports a stage instead of crashing."""
+    def missing():
+        raise ImportError("No module named 'yasp'")
+
+    monkeypatch.setattr(pt2_check, "import_exporter", missing)
+    monkeypatch.setattr(onnx_check, "export", lambda model, inputs: (_ for _ in ()).throw(AssertionError("onnx export must not run")))
+
+    state = eager_check.run(*good_model, artifacts, device="cpu")
+
+    assert state["error"] == "pt2_exporter"
+    assert "No module named 'yasp'" in state["error_detail"]
+    assert [r.stage for r in error_records(caplog)] == ["pt2_exporter"]
+    assert list(artifacts.iterdir()) == []

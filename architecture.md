@@ -159,18 +159,22 @@ Run by `python -m kronos_edge.eager_check` with `--device cuda` and the
   `load_npz`, `validate_inputs`.
 - `run_eager` (`eager_check.py`): one forward pass under `torch.no_grad()`
   on copies of the inputs. Stage: `forward`.
-- `export_pt2` (`pt2_check.py`): `torch.export.export` on independent CPU
-  copies of the model and inputs in state, under `torch.no_grad()`,
-  decomposed to Core ATen (what `yasp-toolkit kernelgen export` produces);
+- `export_pt2` (`pt2_check.py`): yasp's exporter
+  (`yasp.compile.common.exporter.export`, the function `yasp-toolkit kernelgen
+  export` runs: inference mode, Core ATen decompositions) on independent CPU
+  copies of the model and inputs in state, saved with the exporter's `save`;
+  the package is imported in the node, so an image without it is the
+  `pt2_exporter` stage;
   the model is not cast, and the eager model and inputs in state are neither
   moved nor written to. The archive records the trace device; a GPU-traced
   reference failed on the kernelgen service with the error a torch built
   without CUDA raises when loading it, and CPU-traced references were
   accepted, so the copies remove that loading failure (the service's build is
   inferred from that behaviour, not observed). Keeps the
-  `ExportedProgram` in state and writes `model.pt2` with `torch.export.save`.
+  `ExportedProgram` in state and writes `model.pt2`.
   Runs first after the eager pass so the host's kernelgen reference exists
-  before the ONNX chain starts. Stages: `pt2_capture`, `pt2_save`.
+  before the ONNX chain starts. Stages: `pt2_exporter`, `pt2_capture`,
+  `pt2_save`.
 - `export_onnx` (`onnx_check.py`): casts a copy of the model and its float
   inputs to the configured precision unless they already have it, leaving
   the eager model in state untouched; then

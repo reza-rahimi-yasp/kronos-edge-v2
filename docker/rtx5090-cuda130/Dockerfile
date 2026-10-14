@@ -16,6 +16,16 @@ ENV PATH=/opt/venv/bin:$PATH
 RUN pip install --no-cache-dir "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cu130 \
     && pip install --no-cache-dir "tensorrt-cu13==${TENSORRT_VERSION}" langgraph numpy "onnx==1.23.2" "onnxscript==0.7.2" "onnxsim==0.8.1" pyyaml pydantic
 
+# yasp's exporter (`yasp.compile.common.exporter`, what `yasp-toolkit kernelgen export` runs) produces the kernelgen
+# reference. It comes from the yasp package index, needs no key, and is installed under a constraints file of
+# everything already here, so torch's CUDA build and the registry versions cannot move. Nothing else of the toolkit.
+ARG YASP_COMPILE_COMMON_VERSION=1.10.0
+ARG YASP_INDEX_URL=http://nexus.yasp.localdomain/repository/pypi-proxy/simple/
+RUN pip freeze > /tmp/constraints.txt \
+    && pip install --no-cache-dir -c /tmp/constraints.txt "yasp-compile-common==${YASP_COMPILE_COMMON_VERSION}" \
+        --extra-index-url "${YASP_INDEX_URL}" --trusted-host nexus.yasp.localdomain \
+    && rm /tmp/constraints.txt
+
 # The user's `dependencies` are pip-installed at run time; resolve them against the same index as torch so
 # packages with CUDA builds (torchvision, for one) match the image's CUDA.
 ENV PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu130

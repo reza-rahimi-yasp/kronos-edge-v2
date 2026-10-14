@@ -1,12 +1,14 @@
-"""pt2 export check: trace the eagerly-run model with torch.export and save the reference kernelgen optimizes.
+"""pt2 export check: export the eagerly-run model with yasp's exporter and save the reference kernelgen optimizes.
 
 Runs inside the container right after the eager check, on the model and
 inputs already in state and before the ONNX export, so the reference the
-host's kernelgen step needs exists as early as possible. The model is traced
-in inference mode under ``torch.no_grad()`` and decomposed to Core ATen,
-which is what ``yasp-toolkit kernelgen export`` produces and what
-``kernelgen compile --reference`` expects; the toolkit itself cannot run here
-because the image has no yasp-agent and the host never runs user code. The
+host's kernelgen step needs exists as early as possible. The export is
+``yasp.compile.common.exporter`` (``export`` then ``save``), the functions
+``yasp-toolkit kernelgen export`` runs: inference mode, Core ATen
+decompositions, ``torch.export.save``. The image carries that package for
+this and nothing else of the toolkit; the exporter needs no key, and the host
+never runs user code. It is imported inside the node, so an image without it
+reports the ``pt2_exporter`` stage. The
 model is exported as the user wrote it: precision is applied at the ONNX
 export only. It is traced from independent CPU copies of the model and the
 inputs: ``torch.export.save`` records the trace device in every weight and
@@ -17,15 +19,13 @@ references were accepted (the service's build is inferred from that, not
 observed). The copies remove that loading failure and nothing more. The
 eager model and the user's inputs in state are never moved or written to.
 The exported program stays in state and is written to
-the artifact directory as ``model.pt2`` with ``torch.export.save``, weights
+the artifact directory as ``model.pt2`` by the exporter's ``save``, weights
 bundled.
 """
 
 import copy
 import re
 from pathlib import Path
-
-import torch
 
 from kronos_edge.artifacts import PT2_FILE
 from kronos_edge.log import PACKAGE_LOGGER, get_logger
@@ -53,29 +53,29 @@ def cpu_copies(model, inputs):
     return copy.deepcopy(model).to("cpu"), tuple(t.detach().to("cpu", copy=True) for t in inputs)
 
 
-def export(model, inputs):
-    """torch.export in inference mode, decomposed to Core ATen, as ``yasp-toolkit kernelgen export`` does."""
-    with torch.no_grad():
-        exported = torch.export.export(model, tuple(inputs))
-    return exported.run_decompositions()
+def import_exporter():
+    """yasp's exporter module, imported here so a missing package reaches the report as the ``pt2_exporter`` stage."""
+    from yasp.compile.common import exporter
 
-
-def save(program, path) -> None:
-    torch.export.save(program, str(path))
+    return exporter
 
 
 def export_pt2(state: State) -> State:
-    stage = "pt2_capture"
+    stage = "pt2_exporter"
     try:
-        logger.info("tracing CPU copies of the model and inputs with torch.export for the kernelgen reference", extra={"stage": stage})
+        exporter = import_exporter()
+
+        stage = "pt2_capture"
+        logger.info("exporting CPU copies of the model and inputs with yasp's exporter for the kernelgen reference", extra={"stage": stage})
+        model, inputs = cpu_copies(state["model"], state["user_inputs"])
         try:
-            program = export(*cpu_copies(state["model"], state["user_inputs"]))
+            program = exporter.export(model, inputs)
         except Exception as exc:
             raise Pt2ExportFailed(exc) from exc
 
         stage = "pt2_save"
         path = Path(state["artifacts_dir"]) / PT2_FILE
-        save(program, path)
+        exporter.save(program, path)
         logger.info("wrote %s", path, extra={"stage": stage})
     except Exception as exc:
         return fail(logger, stage, exc)

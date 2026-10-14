@@ -19,10 +19,15 @@ decisions: do not add file listings, commands, or summaries here.
   `model.pt2` and `model.engine` before it starts. The toolkit exits 0 after
   some early HTTP errors, so a node trusts the file it asked for, not the
   exit code.
-- The kernelgen reference is produced in the container by `torch.export`
-  directly (inference mode, Core ATen decompositions, `torch.export.save`),
-  mirroring `yasp-toolkit kernelgen export`: the image has no yasp-agent and
-  the host must not run user code. It is exported right after the eager pass
+- The kernelgen reference is produced in the container by yasp's own
+  exporter, `yasp.compile.common.exporter` (`export`, then `save`), the
+  functions `yasp-toolkit kernelgen export` runs, never by a hand-written
+  equivalent: the image carries `yasp-compile-common` for this alone, pinned
+  in the Dockerfile and installed under constraints so the registry versions
+  stay, and not the toolkit; the exporter needs no key, so no credential
+  enters the container, and the host must not run user code. The package is
+  imported in the node, so an image without it is a stage, not a crash. It
+  is exported right after the eager pass
   and from the uncast model, traced on independent CPU copies of the model
   and the inputs: the archive records the trace device, and a GPU-traced
   reference failed on the kernelgen service with `Torch not compiled with

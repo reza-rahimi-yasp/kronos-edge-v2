@@ -147,11 +147,14 @@ def test_missing_dependency_reaches_the_report(tmp_path, good_model, artifacts, 
     report_path = tmp_path / "report.json"
     code = (
         f"import sys; sys.modules[{blocked!r}] = None\n"
+        "from conftest import ensure_exporter\n"
+        "ensure_exporter()\n"
         "from kronos_edge.eager_check import main\n"
         f"sys.exit(main([{str(model)!r}, {str(npz)!r}, '--report', {str(report_path)!r}, "
         f"'--artifacts', {str(artifacts)!r}, '--precision', 'fp32', '--threshold', '0.99', '--device', 'cpu']))\n"
     )
-    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
+    tests_dir = str(Path(__file__).resolve().parent)
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(Path(__file__).resolve().parents[1] / "src"), tests_dir])}
 
     result = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
 
@@ -297,8 +300,9 @@ def test_user_prints_do_not_corrupt_the_report(tmp_path, good_model, artifacts):
         "from kronos_edge import tensorrt_check\n"
         "tensorrt_check.build = lambda onnx_path, inputs: b'fake engine'\n"
         "from kronos_edge import benchmark_check\n"
-        "from conftest import FakeEngineRunner\n"
+        "from conftest import FakeEngineRunner, ensure_exporter\n"
         "benchmark_check.load_engine = FakeEngineRunner\n"
+        "ensure_exporter()\n"
         "from kronos_edge.eager_check import main\n"
         f"sys.exit(main([{str(model)!r}, {str(npz)!r}, '--report', {str(report_path)!r}, "
         f"'--artifacts', {str(artifacts)!r}, '--precision', 'fp32', '--threshold', '0.99', '--device', 'cpu']))\n"

@@ -1,6 +1,8 @@
 import json
 import logging
 import subprocess
+import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -76,6 +78,51 @@ def host_matches_registry(monkeypatch):
     """Tests never touch docker or nvidia-smi; the host looks like the registry entry."""
     monkeypatch.setattr(env_check, "image_exists", lambda image: True)
     monkeypatch.setattr(env_check, "host_gpu", lambda: (ENVIRONMENT["gpu"], ENVIRONMENT["driver"]))
+
+
+def _exporter_stand_in():
+    """What `yasp.compile.common.exporter` does, for a venv without the package: inference-mode torch.export, Core ATen."""
+    module = types.ModuleType("yasp.compile.common.exporter")
+
+    def export(model, args, kwargs=None, *, dynamic_shapes=None):
+        was_training = model.training
+        model.eval()
+        try:
+            with torch.no_grad():
+                exported = torch.export.export(model, args, kwargs, dynamic_shapes=dynamic_shapes)
+        finally:
+            model.train(was_training)
+        return exported.run_decompositions()
+
+    def save(exported, path):
+        torch.export.save(exported, str(path))
+
+    module.export, module.save, module.stand_in = export, save, True
+    return module
+
+
+def ensure_exporter():
+    """The exporter module the pt2 node delegates to: yasp's own when the venv has it, else the stand-in registered
+    under its import path. Also run inside the subprocess tests, which see no fixture."""
+    try:
+        from yasp.compile.common import exporter
+    except ImportError:
+        exporter = _exporter_stand_in()
+        for name in ("yasp", "yasp.compile", "yasp.compile.common"):
+            package = sys.modules.get(name) or types.ModuleType(name)
+            package.__path__ = []
+            sys.modules[name] = package
+        sys.modules["yasp.compile.common"].exporter = exporter
+        sys.modules["yasp.compile.common.exporter"] = exporter
+    return exporter
+
+
+@pytest.fixture(autouse=True)
+def official_exporter():
+    """yasp's exporter when the venv has it (`yasp-compile-common`, from `requirements.txt`), else a stand-in with
+    its API, so the suite stays runnable there; `stand_in` tells which one ran. The real library is validated by
+    the GPU run of the image."""
+    return ensure_exporter()
 
 
 @pytest.fixture(autouse=True)

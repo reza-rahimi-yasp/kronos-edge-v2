@@ -45,6 +45,7 @@ EAGER = {
 }
 
 PT2 = {
+    "pt2_exporter": "The kernelgen exporter is not available inside the environment container. Contact support.",
     "pt2_capture": "Your model could not be traced by torch.export for the kernelgen reference. Fix the construct named below.",
     "pt2_save": "The kernelgen reference (model.pt2) could not be written to the artifact directory.",
 }

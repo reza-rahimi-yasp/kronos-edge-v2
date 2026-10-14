@@ -220,7 +220,10 @@ np.savez("input.npz", np.zeros((1, 3, 8, 8), dtype=np.float32))
 Each supported environment has a Dockerfile under `docker/` and a Docker image
 tag in `environments.yaml`. The eager check runs inside that image with the
 GPU attached, so the check refuses to run until the image exists on this
-machine. Build it once, and rebuild it after changing anything under `src/`:
+machine. The build installs `yasp-compile-common`, the package holding
+yasp's exporter, from the yasp package index named in "Install", so that
+index must be reachable while building; no key is involved. Build it once,
+and rebuild it after changing anything under `src/`:
 
 ```bash
 docker build -f docker/rtx5090-cuda130/Dockerfile -t kronos-edge:rtx5090-cuda130 .
@@ -251,9 +254,11 @@ with the engine's output at the same position by the configured metric, and
 every value is printed. A model that changes its inputs in place is fine:
 every stage runs it on copies of your inputs.
 
-Right after the forward pass, `torch.export` traces independent CPU copies of
-the same model and inputs, uncast, into `model.pt2`, the reference kernelgen
-optimizes. The copies matter: the archive records the device the trace ran on
+Right after the forward pass, yasp's own exporter (`yasp.compile.common.exporter`,
+the functions `yasp-toolkit kernelgen export` runs, installed in the image
+and needing no key) traces independent CPU copies of the same model and
+inputs, uncast, into `model.pt2`, the reference kernelgen optimizes. The
+copies matter: the archive records the device the trace ran on
 in every weight, and a torch built without CUDA cannot load an archive traced
 on the GPU (`Torch not compiled with CUDA enabled`). That is the error the
 kernelgen service reported for a GPU-traced reference, before any kernel was
@@ -301,7 +306,7 @@ On a failure, the files produced before it are kept.
 | `model_simplified.onnx` | The onnxsim simplification. |
 | `model.engine` | The serialized TensorRT engine, at the configured precision. Specific to this GPU and TensorRT version. |
 | `benchmark.json` | The latency statistics of both sides, the speedup, and the metric values, as printed. |
-| `model.pt2` | The `torch.export` reference of your model, traced on CPU from an uncast copy, as kernelgen's `reference.pt2`. |
+| `model.pt2` | The reference of your model, exported by yasp's exporter on CPU from an uncast copy, as kernelgen's `reference.pt2`. |
 | `kernel.py` | The optimized kernel kernelgen returned (its `module_source.py`). |
 | `kernelgen_report.json` | The kernelgen job's report. |
 | `kernelgen_eval.json` | The evaluator's results for `kernel.py`: correctness checks and speedup. |
@@ -345,6 +350,7 @@ and dtype of every input, `DEBUG` adds the full traceback of a failure.
 | input.npz could not be read. | Check the path, and that the file was written with `numpy.savez`. |
 | input.npz does not match the inputs returned by get_inputs(). | The detail line names the key and the expected versus found shape and dtype. |
 | Your model cannot be run through eager mode. Either fix it or contact support. | The forward pass raised. The detail line shows the exception. |
+| The kernelgen exporter is not available inside the environment container. Contact support. | The image lacks `yasp-compile-common`. |
 | Your model could not be traced by torch.export for the kernelgen reference. Fix the construct named below. | `torch.export` could not capture the model, for example a branch on a tensor value. The detail names the construct. |
 | The kernelgen reference (model.pt2) could not be written to the artifact directory. | Check the directory is writable; the detail shows the OS error. |
 | The ONNX exporter is not available inside the environment container. Contact support. | The image lacks `onnx` or `onnxscript`. |
