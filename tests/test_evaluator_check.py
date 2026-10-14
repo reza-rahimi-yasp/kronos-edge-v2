@@ -7,6 +7,7 @@ against recorded Docker and toolkit commands (nothing shells out, no key is mint
 pulled), and that only the worker the check started is ever removed.
 """
 
+import json
 import os
 import signal
 import subprocess
@@ -526,6 +527,8 @@ def docker(monkeypatch):
 
     def run_docker(args, **kwargs):
         calls.append((args, kwargs))
+        if args[0] == "inspect":  # nothing holds the task slot
+            raise DockerFailed(f"docker {' '.join(args)} exited 1\nError response from daemon: No such container: {args[-1]}")
         return "container-id"
 
     def attach_worker(name, log):
@@ -561,10 +564,12 @@ def test_the_worker_is_created_as_the_documented_deployment_with_only_the_scoped
     assert option(create, "--group-add") == "998"
     assert option(create, "-v") == "/var/run/docker.sock:/var/run/docker.sock"
     env_flags = [create[i + 1] for i, flag in enumerate(create) if flag == "-e"]
+    # The owner marker is set on the worker and forwarded into its task containers, where the stop reads it back.
     assert env_flags == [
         "NVIDIA_VISIBLE_DEVICES=all", "YASP_API_KEY", f"YASP_LAUNCH_WORKER_IMAGE={IMAGE}", "YASP_LAUNCH_DOCKER_GPUS=all",
         "YASP_LAUNCH_DOCKER_SHM_SIZE=8g", "YASP_LAUNCH_DOCKER_VOLUMES=yasp-dataset-cache:/mnt/dataset-cache",
-        "YASP_DATASET_CACHE_DIR=/mnt/dataset-cache", "YASP_LAUNCH_DOCKER_FORWARD_ENV=YASP_DATASET_CACHE_DIR",
+        "YASP_DATASET_CACHE_DIR=/mnt/dataset-cache", f"KRONOS_EVALUATOR={evaluator.name}",
+        "YASP_LAUNCH_DOCKER_FORWARD_ENV=YASP_DATASET_CACHE_DIR,KRONOS_EVALUATOR",
     ]
     assert not {"--restart", "--label", "--health-cmd", "--detach"} & set(create)
     assert options["env"]["YASP_API_KEY"] == WORKER_KEY and options["secret"] == WORKER_KEY
@@ -720,15 +725,126 @@ def test_a_failure_before_create_removes_nothing(monkeypatch, docker):
     assert docker.calls == []
 
 
-def test_stop_removes_only_this_runs_container_then_reaps_the_client(docker):
+TASK_SLOT = "yasp-launcher-slot"
+OTHER_WORKER = "gaia-worker-persistent"
+
+
+def task_env(owner):
+    """The environment of a task container the launcher started: the image's plus what the worker forwarded."""
+    env = ["PATH=/opt/conda/bin:/usr/bin", "YASP_DATASET_CACHE_DIR=/mnt/dataset-cache"]
+    return env + ([f"KRONOS_EVALUATOR={owner}"] if owner else [])
+
+
+@pytest.fixture
+def daemon(monkeypatch, docker):
+    """The containers of a fake daemon, name -> environment, behind the recorded `inspect`, `stop`, and `rm`.
+
+    Besides this check's worker, a host may hold someone else's persistent worker and the launcher's task
+    slot, which every worker on the machine shares. `inspect` answers for a name in the table and fails as
+    Docker does for one that is not; `stop` ends the attached client; `rm` drops the name.
+    """
+    containers = {OTHER_WORKER: ["YASP_API_KEY=theirs", "YASP_LAUNCH_DOCKER_FORWARD_ENV=YASP_DATASET_CACHE_DIR"]}
+    recorded = evaluator_check.run_docker
+
+    def run_docker(args, **kwargs):
+        name = args[-1]
+        if args[0] == "inspect":
+            docker.calls.append((args, kwargs))
+            if name not in containers:
+                raise DockerFailed(f"docker {' '.join(args)} exited 1\nError response from daemon: No such container: {name}")
+            return json.dumps(containers[name])
+        if args[0] == "stop":
+            docker.client.code = 143
+        elif args[0] == "rm":
+            containers.pop(name, None)
+        return recorded(args, **kwargs)
+
+    monkeypatch.setattr(evaluator_check, "run_docker", run_docker)
+    return containers
+
+
+def named(calls, name):
+    return [args[0] for args, _ in calls if args[-1] == name]
+
+
+def test_stop_stops_the_worker_gracefully_then_removes_it_and_reaps_the_client(docker, daemon):
+    """`docker stop` lets the worker cancel its task and tear down the task container; the removal follows."""
     evaluator = REAL_START(["register"])
-    docker.client.code = 137  # the container is gone, so the attached client exits
 
     REAL_STOP(evaluator)
 
-    assert docker.calls[-1][0] == ["rm", "--force", evaluator.name]
+    after_start = docker.calls[4:]
+    assert [args[0] for args, _ in after_start] == ["stop", "rm", "inspect"]
+    stop, options = after_start[0]
+    assert stop == ["stop", "--time", "30", evaluator.name]
+    assert options["timeout"] > evaluator_check.STOP_GRACE_S
+    assert after_start[1][0] == ["rm", "--force", evaluator.name]
+    assert after_start[2][0][-1] == TASK_SLOT
     assert docker.client.waits == [evaluator_check.STOP_TIMEOUT_S]
     assert evaluator.log.closed
+
+
+@pytest.mark.parametrize(
+    "owner, removed",
+    [
+        pytest.param("this", True, id="this_workers_task_still_running"),
+        pytest.param("kronos-eval-" + "0" * 32, False, id="another_checks_task"),
+        pytest.param(None, False, id="task_without_a_marker"),
+    ],
+)
+def test_stop_removes_the_task_slot_only_when_this_workers_task_holds_it(docker, daemon, caplog, owner, removed):
+    """The slot is shared: after the worker is gone, its own task is removed, anyone else's is left alone."""
+    evaluator = REAL_START(["register"])
+    daemon[TASK_SLOT] = task_env(evaluator.name if owner == "this" else owner)
+
+    REAL_STOP(evaluator)
+
+    assert (TASK_SLOT not in daemon) is removed
+    assert named(docker.calls, TASK_SLOT) == (["inspect", "rm"] if removed else ["inspect"])
+    assert docker.calls[-1][0] == (["rm", "--force", TASK_SLOT] if removed else ["inspect", "--type", "container", "--format", "{{json .Config.Env}}", TASK_SLOT])
+    assert OTHER_WORKER in daemon and named(docker.calls, OTHER_WORKER) == []
+    assert evaluator.name not in daemon
+    assert [r.stage for r in caplog.records if r.levelname == "WARNING"] == (["evaluator_release"] if removed else [])
+
+
+def test_stop_leaves_a_free_slot_and_an_unrelated_worker_alone(docker, daemon):
+    evaluator = REAL_START(["register"])
+
+    REAL_STOP(evaluator)
+
+    assert named(docker.calls, TASK_SLOT) == ["inspect"]
+    assert OTHER_WORKER in daemon and named(docker.calls, OTHER_WORKER) == []
+    assert evaluator.name not in daemon
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(DockerFailed("docker stop --time 30 kronos-eval-x exited 1\ndaemon gone"), id="stop_fails"),
+        pytest.param(subprocess.TimeoutExpired(["docker", "stop"], 90), id="stop_hangs"),
+    ],
+)
+def test_a_graceful_stop_that_fails_is_logged_and_the_worker_is_still_removed(monkeypatch, docker, daemon, caplog, failure):
+    """The removal is the contract; a stop the daemon refuses or that hangs is logged and the force path follows."""
+    with_daemon = evaluator_check.run_docker
+
+    def run_docker(args, **kwargs):
+        if args[0] == "stop":
+            docker.calls.append((args, kwargs))
+            raise failure
+        return with_daemon(args, **kwargs)
+
+    monkeypatch.setattr(evaluator_check, "run_docker", run_docker)
+    evaluator = REAL_START(["register"])
+    daemon[TASK_SLOT] = task_env(evaluator.name)
+    docker.client.code = 137
+
+    REAL_STOP(evaluator)
+
+    assert [args[0] for args, _ in docker.calls[4:]] == ["stop", "rm", "inspect", "rm"]
+    assert evaluator.name not in daemon and TASK_SLOT not in daemon
+    assert [r.stage for r in caplog.records if r.levelname == "WARNING"] == ["evaluator_release", "evaluator_release"]
+    assert error_records(caplog) == []
 
 
 def test_stop_kills_an_attached_client_that_does_not_exit(monkeypatch, docker):
@@ -749,10 +865,10 @@ def test_stop_kills_an_attached_client_that_does_not_exit(monkeypatch, docker):
 
 
 def test_stop_tolerates_a_container_that_is_already_gone(monkeypatch, docker):
-    """`docker rm --force` of a missing container exits 1 on older daemons; the goal, no container, is met."""
+    """`docker stop` and `rm --force` of a missing container exit 1; the goal, no container, is met."""
     evaluator = REAL_START(["register"])
     docker.client.code = 0
-    monkeypatch.setattr(evaluator_check, "run_docker", lambda args, **kwargs: (_ for _ in ()).throw(DockerFailed(f"docker rm --force {evaluator.name} exited 1\nError response from daemon: No such container: {evaluator.name}")))
+    monkeypatch.setattr(evaluator_check, "run_docker", lambda args, **kwargs: (_ for _ in ()).throw(DockerFailed(f"docker {' '.join(args)} exited 1\nError response from daemon: No such container: {args[-1]}")))
 
     REAL_STOP(evaluator)
 
@@ -762,9 +878,9 @@ def test_stop_tolerates_a_container_that_is_already_gone(monkeypatch, docker):
 def test_a_stop_whose_removal_fails_still_reaps_the_client_and_reports_the_container(monkeypatch, docker):
     evaluator = REAL_START(["register"])
     docker.client.code = 0
-    monkeypatch.setattr(evaluator_check, "run_docker", lambda args, **kwargs: (_ for _ in ()).throw(DockerFailed(f"docker rm --force {evaluator.name} exited 1\ndaemon gone")))
+    monkeypatch.setattr(evaluator_check, "run_docker", lambda args, **kwargs: (_ for _ in ()).throw(DockerFailed(f"docker {' '.join(args)} exited 1\ndaemon gone")))
 
-    with pytest.raises(DockerFailed, match=evaluator.name):
+    with pytest.raises(DockerFailed, match=f"rm --force {evaluator.name}"):
         REAL_STOP(evaluator)
 
     assert docker.client.waits == [evaluator_check.STOP_TIMEOUT_S]

@@ -18,10 +18,20 @@ nodes:
   so its name is not overridden. The node polls the listing until the
   evaluator appears, for a bounded time. The container is recorded in state
   as ``evaluator``; an evaluator that was already registered is not.
-- ``release_evaluator``: removes the container in state, if any. The graph
-  runs it after every outcome of the kernelgen nodes, so a worker this check
-  started never outlives the check; an evaluator it did not start is never
-  touched. A failure to remove is reported only when nothing failed before it.
+- ``release_evaluator``: stops the container in state, if any, then removes
+  it. The worker runs each task in a sibling container it creates through
+  the Docker socket under the launcher's fixed slot name, shared by every
+  worker on the machine, and tears it down when its task is cancelled, so
+  the worker is first asked to stop (``docker stop``, bounded: SIGTERM, then
+  the daemon kills it) and removed by force only after that. Once the worker
+  is gone, the slot is inspected: the worker is started with
+  ``KRONOS_EVALUATOR=<container name>`` forwarded into its task containers,
+  so a slot whose environment names this worker is its leftover and is
+  removed; one without that marker belongs to another worker and is never
+  touched. The graph runs the node after every outcome of the kernelgen
+  nodes, so a worker this check started never outlives the check; an
+  evaluator it did not start is never touched. A failure to remove is
+  reported only when nothing failed before it.
 
 ``yasp-eval`` names the executable inside the official worker image; the host
 installs no evaluator package and never runs it itself. The host needs only
@@ -60,11 +70,18 @@ WORKER_REGISTRY = "docker.yasp.ai"
 WORKER_REPOSITORY = f"{WORKER_REGISTRY}/yasp-eval/nvidia"
 WORKER_TAGS_URL = f"https://{WORKER_REGISTRY}/v2/yasp-eval/nvidia/tags/list"
 DOCKER_SOCKET = "/var/run/docker.sock"
+# The fixed name the worker's launcher gives the sibling container of each task (its documented default for
+# YASP_LAUNCH_DOCKER_SLOT_NAME), shared by every worker on the machine so their tasks take turns on the GPU.
+TASK_SLOT = "yasp-launcher-slot"
+# Set on the worker to its container name and forwarded into its task containers, where it names their owner.
+OWNER_VARIABLE = "KRONOS_EVALUATOR"
 # How long a started evaluator may take to appear in the listing, and how often the listing is asked.
 READY_TIMEOUT_S = 120.0
 POLL_INTERVAL_S = 5.0
 # A single inventory request must not consume the whole readiness window.
 LISTING_TIMEOUT_S = 30.0
+# How long `docker stop` gives the worker to cancel its task and tear down the task container before the daemon kills it.
+STOP_GRACE_S = 30.0
 # How long the attached Docker client may take to exit once its container is removed before it is killed.
 STOP_TIMEOUT_S = 10.0
 # Bounds for the Docker commands: a first pull of the worker image is large and is not charged to readiness.
@@ -77,7 +94,7 @@ RELEASE_PATTERN = re.compile(r"\d+\.\d+\.\d+")
 NO_EVALUATORS = "No evaluators"
 # The header of the table's first column; a listing without it is not a listing.
 TABLE_HEADER = "GPU Name"
-# What `docker rm` says about a container that is already gone, which is the state removal is after.
+# What `docker rm`, `stop`, and `inspect` say about a container that is already gone, which is the state removal is after.
 NO_SUCH_CONTAINER = "No such container"
 
 _active_evaluator = None
@@ -157,6 +174,39 @@ def remove_worker(name: str) -> None:
             raise
 
 
+def stop_worker(name: str) -> None:
+    """Ask the worker to stop and wait for it, bounded: on SIGTERM it cancels its task and tears down the task container.
+
+    The daemon kills the worker when the grace runs out. A stop the daemon refuses or that hangs is logged:
+    the removal that follows is the contract, and the task container is checked afterwards either way.
+    """
+    try:
+        run_docker(["stop", "--time", f"{STOP_GRACE_S:.0f}", name], timeout=STOP_GRACE_S + DOCKER_TIMEOUT_S)
+    except (DockerFailed, subprocess.TimeoutExpired) as exc:
+        if NO_SUCH_CONTAINER in str(exc):
+            return
+        logger.warning("%s: %s; removing %s by force", type(exc).__name__, exc, name, extra={"stage": "evaluator_release"})
+
+
+def task_owner() -> str | None:
+    """The worker that started the task container holding the slot, read from the marker it forwarded; None without one."""
+    try:
+        output = run_docker(["inspect", "--type", "container", "--format", "{{json .Config.Env}}", TASK_SLOT])
+    except DockerFailed as exc:
+        if NO_SUCH_CONTAINER in str(exc):
+            return None
+        raise
+    prefix = f"{OWNER_VARIABLE}="
+    return next((entry.removeprefix(prefix) for entry in json.loads(output) or [] if entry.startswith(prefix)), None)
+
+
+def remove_owned_task(name: str) -> None:
+    """Remove the task container the worker ``name`` left in the slot, if it is there; another worker's is never touched."""
+    if task_owner() == name:
+        logger.warning("the task container %s of %s is still running; removing it", TASK_SLOT, name, extra={"stage": "evaluator_release"})
+        remove_worker(TASK_SLOT)
+
+
 def prepare_worker() -> tuple[str, str]:
     """Mint the keys, resolve the newest release of the worker image, and pull it; returns the image and the registration key."""
     logger.info("minting the registry and registration keys for the Gaia worker with %s", TOOLKIT, extra={"stage": "evaluator_start"})
@@ -197,7 +247,8 @@ def start_evaluator(args: list[str]) -> Evaluator:
         "-e", "YASP_LAUNCH_DOCKER_SHM_SIZE=8g",
         "-e", "YASP_LAUNCH_DOCKER_VOLUMES=yasp-dataset-cache:/mnt/dataset-cache",
         "-e", "YASP_DATASET_CACHE_DIR=/mnt/dataset-cache",
-        "-e", "YASP_LAUNCH_DOCKER_FORWARD_ENV=YASP_DATASET_CACHE_DIR",
+        "-e", f"{OWNER_VARIABLE}={name}",
+        "-e", f"YASP_LAUNCH_DOCKER_FORWARD_ENV=YASP_DATASET_CACHE_DIR,{OWNER_VARIABLE}",
         image, EVALUATOR, *args,
     ]
     logger.info("starting the Gaia worker container %s", name, extra={"stage": "evaluator_start"})
@@ -217,10 +268,14 @@ def start_evaluator(args: list[str]) -> Evaluator:
 
 
 def stop_evaluator(evaluator: Evaluator) -> None:
-    """Remove this check's container, then reap the attached client, killing it if it does not exit, and drop the log."""
+    """Stop and remove this check's container, reap the attached client (killed if it does not exit), drop the log, then
+    remove the task container only if this worker's is still in the slot."""
     process = evaluator.process
     try:
-        remove_worker(evaluator.name)
+        try:
+            stop_worker(evaluator.name)
+        finally:
+            remove_worker(evaluator.name)
     finally:
         try:
             try:
@@ -233,6 +288,7 @@ def stop_evaluator(evaluator: Evaluator) -> None:
                 process.wait(timeout=STOP_TIMEOUT_S)
         finally:
             evaluator.log.close()
+    remove_owned_task(evaluator.name)
 
 
 def listed(output: str, gpu: str, routing: str) -> bool:

@@ -56,9 +56,19 @@ decisions: do not add file listings, commands, or summaries here.
   host created is the only one it removes: it is recorded in state, every
   path from `ensure_evaluator` on runs `release_evaluator`, a failure after
   `docker create` removes it by name, and an evaluator found already
-  registered is never touched. A removal failure never replaces the failure
-  that led to it. The toolkit missing while a key is minted is the toolkit
-  stage; Docker or its socket missing is the evaluator command stage.
+  registered is never touched. The worker runs each task in a sibling
+  container under the launcher's shared slot name and tears it down when
+  the task is cancelled, which a forced removal (SIGKILL) skips, so the
+  worker is stopped first (`docker stop`, bounded) and removed after. The
+  slot is shared with any other worker on the machine, so it is removed
+  only on proof of ownership: the worker is created with
+  `KRONOS_EVALUATOR=<its container name>` listed in
+  `YASP_LAUNCH_DOCKER_FORWARD_ENV`, the launcher's documented way of copying
+  worker variables into task containers, and once the worker is gone the
+  slot is removed only if `docker inspect` shows that marker for this
+  worker. A removal failure never replaces the failure that led to it. The
+  toolkit missing while a key is minted is the toolkit stage; Docker or its
+  socket missing is the evaluator command stage.
 - `config.yaml` has two kinds of fields. The five environment fields must
   equal a registry entry and select the image. Settings (`precision`,
   `metric`, `threshold`) are validated by the same schema but never take part
