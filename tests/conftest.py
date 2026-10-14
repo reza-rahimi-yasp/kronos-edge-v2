@@ -9,7 +9,7 @@ import yaml
 
 import torch
 
-from kronos_edge import benchmark_check, container, eager_check, env_check, kernelgen_check, tensorrt_check
+from kronos_edge import benchmark_check, container, eager_check, env_check, evaluator_check, kernelgen_check, tensorrt_check
 
 ENVIRONMENT = {
     "gpu": "NVIDIA GeForce RTX 5090",
@@ -158,26 +158,87 @@ FAKE_KERNEL = "import torch\n\n\nclass Model(torch.nn.Module):\n    def forward(
 FAKE_TASK_LINE = "  task 00000000-0000-0000-0000-000000000000 (completed)\n"
 
 
-def fake_toolkit(args, result=PASSING_RESULT):
-    """What a successful yasp-toolkit run leaves behind: the kernel and report, or the results.json."""
+def evaluator_listing(*rows):
+    """What `eval workers` prints: a table with one (gpu, routing) row each, or the line for no match."""
+    if not rows:
+        return "No evaluators match.\n"
+    lines = [
+        f"{len(rows)} evaluator{'' if len(rows) == 1 else 's'}",
+        "┏━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━┳━━━━━━┓",
+        "┃ GPU Name ┃ Routing ┃ Version ┃ Tags ┃",
+        "┡━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━╇━━━━━━┩",
+        *(f"│ {gpu} │ {routing} │ 1.10.0  │ host: {gpu.split()[-1].lower()} │" for gpu, routing in rows),
+        "└──────────┴─────────┴─────────┴──────┘",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def fake_toolkit(args, result=PASSING_RESULT, timeout=None):
+    """What a successful yasp-toolkit run leaves behind: the kernel and report, or the results.json.
+
+    `eval workers` lists an evaluator advertising the config's GPU under the routing key asked for,
+    so by default a run finds its evaluator registered and starts none.
+    """
 
     def option(name):
         return Path(args[args.index(name) + 1])
 
+    stdout = FAKE_TASK_LINE
     if args[:2] == ["kernelgen", "compile"]:
         option("--output").write_text(FAKE_KERNEL)
         option("--report").write_text(json.dumps({"gpu_name": args[args.index("--gpu-name") + 1], "eval_result": result}))
     elif args[:2] == ["eval", "compare"]:
         option("--output").write_text(json.dumps({"opt_1": result}))
+    elif args[:2] == ["eval", "workers"]:
+        stdout = evaluator_listing((CONFIG["gpu"], str(option("--tag")).removeprefix("routing=")))
     else:
         raise AssertionError(f"unexpected toolkit command {args}")
-    return subprocess.CompletedProcess(["yasp-toolkit", *args], 0, stdout=FAKE_TASK_LINE, stderr="")
+    return subprocess.CompletedProcess(["yasp-toolkit", *args], 0, stdout=stdout, stderr="")
 
 
 @pytest.fixture(autouse=True)
 def toolkit_stub(monkeypatch):
     """Stand in for yasp-toolkit, which needs a Yasp API key and the hosted service: write what a successful run would."""
     monkeypatch.setattr(kernelgen_check, "run_toolkit", fake_toolkit)
+
+
+class FakeEvaluator:
+    """Stand in for a `yasp-eval register` process: alive until `exit_code` is set, with canned output."""
+
+    def __init__(self, args, code=None, output=""):
+        self.args, self.code, self.text = args, code, output
+
+    def exit_code(self):
+        return self.code
+
+    def output(self):
+        return self.text
+
+
+class EvaluatorRecorder:
+    """The evaluators the check started and stopped; `exits` is the (code, output) a started one reports."""
+
+    def __init__(self):
+        self.started, self.stopped, self.exits = [], [], None
+
+    def start(self, args):
+        evaluator = FakeEvaluator(args, *(self.exits or ()))
+        self.started.append(evaluator)
+        return evaluator
+
+    def stop(self, evaluator):
+        self.stopped.append(evaluator)
+
+
+@pytest.fixture(autouse=True)
+def evaluators(monkeypatch):
+    """Tests never start a real evaluator: record what the check would start and stop, and poll without sleeping."""
+    recorder = EvaluatorRecorder()
+    monkeypatch.setattr(evaluator_check, "start_evaluator", recorder.start)
+    monkeypatch.setattr(evaluator_check, "stop_evaluator", recorder.stop)
+    monkeypatch.setattr(evaluator_check, "POLL_INTERVAL_S", 0)
+    monkeypatch.setattr(evaluator_check, "READY_TIMEOUT_S", 1)
+    return recorder
 
 
 @pytest.fixture

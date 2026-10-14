@@ -79,6 +79,14 @@ BENCHMARK = {
     "accuracy": "The TensorRT engine's outputs do not match the eager outputs within the threshold in config.yaml.",
 }
 
+EVALUATOR = {
+    "evaluator_inventory": "The evaluators registered for the kernelgen evaluation could not be listed. The toolkit's output is below.",
+    "evaluator_command": "The yasp-eval command is not available. Install yasp-compile-eval into the environment that runs the check.",
+    "evaluator_start": "No evaluator for your config's gpu and eval_routing is registered, and the one started on this machine exited before registering. Its output is below.",
+    "evaluator_ready": "No evaluator for your config's gpu and eval_routing is registered, and the one started on this machine did not register in time. Check the gpu it advertises and that the service is reachable.",
+    "evaluator_release": "The evaluator started on this machine for the kernelgen evaluation could not be stopped. Stop the yasp-eval process yourself.",
+}
+
 KERNELGEN = {
     "kernelgen_reference": "The kernelgen reference (model.pt2) is missing from the artifact directory. Contact support.",
     "kernelgen_engine": "The TensorRT engine (model.engine) kernelgen waits for is missing from the artifact directory. Contact support.",
@@ -90,4 +98,4 @@ KERNELGEN = {
     "kernelgen_eval_incorrect": "The kernelgen kernel failed the evaluation on this machine: it did not build or did not match your model. The evaluator's report is below. Contact support.",
 }
 
-CUSTOMER_MESSAGES = merge(ENV, CONTAINER, EAGER, PT2, ONNX, ONNXSIM, TENSORRT, BENCHMARK, KERNELGEN)
+CUSTOMER_MESSAGES = merge(ENV, CONTAINER, EAGER, PT2, ONNX, ONNXSIM, TENSORRT, BENCHMARK, EVALUATOR, KERNELGEN)

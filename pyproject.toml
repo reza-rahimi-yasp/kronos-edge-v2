@@ -12,6 +12,7 @@ dependencies = [
     "pyyaml",
     "torch",
     "yasp-agent[gaia]",
+    "yasp-compile-eval",
 ]
 
 [dependency-groups]

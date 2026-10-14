@@ -27,6 +27,7 @@ class State(TypedDict, total=False):
     simplified_onnx: Any
     engine: bytes
     benchmark: dict[str, Any]
+    evaluator: Any  # the yasp-eval process ensure_evaluator started, for release_evaluator; None when it started none
     kernel_path: str
     kernelgen_result: dict
     kernelgen_speedup: float

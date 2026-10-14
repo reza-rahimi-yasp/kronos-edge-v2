@@ -7,6 +7,7 @@ subprocess helper against a missing command, and the config setting that pins th
 
 import json
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -35,7 +36,7 @@ INVALID_TOKEN_RESPONSE = (
 def recording_toolkit(calls, tmp_path):
     """The stub, plus a record of each command and of what the artifact directory held when it ran."""
 
-    def record(args):
+    def record(args, timeout=None):
         calls.append((args, sorted(f.name for f in (tmp_path / ".artifact").iterdir())))
         return fake_toolkit(args)
 
@@ -43,7 +44,7 @@ def recording_toolkit(calls, tmp_path):
 
 
 def failing_toolkit(code, stderr="", stdout=""):
-    return lambda args: subprocess.CompletedProcess(["yasp-toolkit", *args], code, stdout=stdout, stderr=stderr)
+    return lambda args, timeout=None: subprocess.CompletedProcess(["yasp-toolkit", *args], code, stdout=stdout, stderr=stderr)
 
 
 def run_with_config(tmp_path, env_files, **settings):
@@ -63,9 +64,10 @@ def test_kernelgen_runs_after_the_container_and_evaluation_after_kernelgen(tmp_p
     state = run(env_files, *good_model)
 
     assert state["outcome"] == "success"
-    assert [args[:2] for args, _ in calls] == [["kernelgen", "compile"], ["eval", "compare"]]
-    compile_args, seen_before_compile = calls[0]
-    eval_args, seen_before_eval = calls[1]
+    # The evaluator listing comes first (test_evaluator_check), then kernelgen, then the evaluation.
+    assert [args[:2] for args, _ in calls] == [["eval", "workers"], ["kernelgen", "compile"], ["eval", "compare"]]
+    compile_args, seen_before_compile = calls[1]
+    eval_args, seen_before_eval = calls[2]
     # kernelgen starts only once the container has produced the reference and the TensorRT engine.
     assert {"model.pt2", "model.engine", "model.onnx", "model_simplified.onnx"} <= set(seen_before_compile)
     assert "kernel.py" not in seen_before_compile
@@ -104,7 +106,8 @@ def test_eval_routing_pins_this_machines_evaluator_for_both_commands(tmp_path, m
     state = run_with_config(tmp_path, env_files, eval_routing="reza-fractal")
 
     assert state["outcome"] == "success"
-    (compile_args, _), (eval_args, _) = calls
+    (workers_args, _), (compile_args, _), (eval_args, _) = calls
+    assert option(workers_args, "--tag") == "routing=reza-fractal"
     assert option(compile_args, "--eval-routing") == "reza-fractal"
     assert option(eval_args, "--routing") == "reza-fractal"
 
@@ -147,7 +150,7 @@ def test_invalid_eval_routing_is_a_schema_violation(tmp_path, env_files, good_mo
     "toolkit, stage, fragment",
     [
         pytest.param(
-            lambda args: (_ for _ in ()).throw(FileNotFoundError(2, "No such file or directory", "yasp-toolkit")),
+            lambda args, timeout=None: (_ for _ in ()).throw(FileNotFoundError(2, "No such file or directory", "yasp-toolkit")),
             "kernelgen_toolkit", "yasp-agent", id="toolkit_not_installed",
         ),
         pytest.param(failing_toolkit(1, stderr=MISSING_TOKEN_PANEL), "kernelgen_credentials", "YASP_API_KEY", id="no_api_key"),
@@ -162,7 +165,9 @@ def test_invalid_eval_routing_is_a_schema_violation(tmp_path, env_files, good_mo
 def test_kernelgen_failures_are_stages_and_skip_the_evaluation(tmp_path, caplog, monkeypatch, env_files, toolkit, stage, fragment):
     evaluations = []
 
-    def dispatch(args):
+    def dispatch(args, timeout=None):
+        if args[:2] == ["eval", "workers"]:  # the evaluator listing before kernelgen is not under test here
+            return fake_toolkit(args)
         if args[:2] == ["eval", "compare"]:
             evaluations.append(args)
         return toolkit(args)
@@ -205,6 +210,19 @@ def test_real_run_toolkit_captures_output_and_exit_code(tmp_path, monkeypatch):
     assert result.stderr == "err-compile\n"
 
 
+def test_real_run_toolkit_kills_a_command_that_outlives_its_timeout(tmp_path, monkeypatch):
+    script = tmp_path / "fake-toolkit"
+    script.write_text("#!/bin/sh\nexec sleep 30\n")
+    script.chmod(0o755)
+    monkeypatch.setattr(kernelgen_check, "TOOLKIT", str(script))
+    started = time.monotonic()
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        REAL_RUN_TOOLKIT(["eval", "workers"], timeout=0.2)
+
+    assert time.monotonic() - started < 5  # killed at the timeout, not awaited
+
+
 def failing_result(**overrides):
     checks = {**PASSING_RESULT["correctness_checks"], "all_checks_passed": False, **overrides}
     return {**PASSING_RESULT, "correctness_checks": checks}
@@ -213,7 +231,7 @@ def failing_result(**overrides):
 def eval_writes(payload):
     """A toolkit whose `eval compare` writes `payload` (a string is written verbatim) instead of a passing result."""
 
-    def toolkit(args):
+    def toolkit(args, timeout=None):
         if args[:2] == ["eval", "compare"]:
             text = payload if isinstance(payload, str) else json.dumps(payload)
             Path(option(args, "--output")).write_text(text)
@@ -224,7 +242,7 @@ def eval_writes(payload):
 
 
 def eval_fails(code, stderr):
-    def toolkit(args):
+    def toolkit(args, timeout=None):
         if args[:2] == ["eval", "compare"]:
             return subprocess.CompletedProcess(["yasp-toolkit", *args], code, stdout="", stderr=stderr)
         return fake_toolkit(args)
@@ -296,7 +314,7 @@ def test_kernelgen_requires_the_reference_and_the_tensorrt_output(tmp_path, capl
     assert state["error"] == stage
     assert missing in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == [stage]
-    assert calls == []
+    assert [args[:2] for args, _ in calls] == [["eval", "workers"]]  # nothing was submitted to kernelgen
 
 
 def test_kernelgen_files_are_managed_artifacts():

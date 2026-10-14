@@ -5,9 +5,12 @@ user's config and environment, then starts the matched environment's Docker
 container with the GPU attached and runs the container graph inside it. The
 container graph writes `report.json` to a directory the host mounted; the host
 merges it into its own state, so `failure` picks the customer message the
-same way for both graphs. Once the container has succeeded, the host runs the
-kernelgen steps through the `yasp-toolkit` command, which needs the user's
-Yasp API key and so stays on the host. The files the checks produce for the
+same way for both graphs. Once the container has succeeded, the host makes
+sure an evaluator for the config's GPU and routing key is registered, starting
+`yasp-eval register` on this machine when none is, then runs the kernelgen
+steps through the `yasp-toolkit` command; both commands need the user's Yasp
+API key and so stay on the host. An evaluator the host started is stopped on
+every path out of the kernelgen steps. The files the checks produce for the
 user go to the artifact directory, which the host creates and mounts; the
 container's `model.pt2` and `model.engine` in it are what the host's
 `kernelgen` node depends on.
@@ -19,12 +22,15 @@ stateDiagram-v2
     load_config --> failure : error
     match_environment --> run_in_container : ok
     match_environment --> failure : error
-    run_in_container --> kernelgen : ok (model.pt2, model.engine)
+    run_in_container --> ensure_evaluator : ok (model.pt2, model.engine)
     run_in_container --> failure : error
+    ensure_evaluator --> kernelgen : ok (evaluator registered)
+    ensure_evaluator --> release_evaluator : error
     kernelgen --> evaluate_kernelgen : ok (kernel.py)
-    kernelgen --> failure : error
-    evaluate_kernelgen --> success : ok
-    evaluate_kernelgen --> failure : error
+    kernelgen --> release_evaluator : error
+    evaluate_kernelgen --> release_evaluator
+    release_evaluator --> success : ok
+    release_evaluator --> failure : error
     success --> [*]
     failure --> [*]
 
@@ -50,7 +56,9 @@ stateDiagram-v2
 ```
 
 Every node either advances the state or records a failure stage in
-`error` and `error_detail`; `route_on_error` sends any failure to `failure`.
+`error` and `error_detail`; `route_on_error` sends any failure to `failure`,
+except that from `ensure_evaluator` on it sends it through `release_evaluator`
+first, which keeps the error it was given.
 
 ## Host graph
 
@@ -71,6 +79,17 @@ Every node either advances the state or records a failure stage in
   (`--dependency`) passed on the command line, then validates `report.json` and requires the exit code
   to agree with it. Stage: `container_run`; a
   failure reported by the container is passed through under its own stage.
+- `ensure_evaluator` (`evaluator_check.py`): runs `yasp-toolkit eval workers`
+  filtered by the config's `eval_routing` and looks for a row whose GPU name
+  and routing equal the config's `gpu` and `eval_routing` exactly. If there is
+  none, starts `yasp-eval register --tag routing=<eval_routing>` as a host
+  subprocess (output captured to a temporary file; the GPU name is not
+  overridden, so the command's own hardware and toolchain detection applies),
+  records it in `evaluator`, and polls the listing until the row appears or a
+  bounded time passes; a process that exits meanwhile fails with its output.
+  An evaluator that was already registered is not recorded. Stages:
+  `evaluator_inventory`, `evaluator_command`, `evaluator_start`,
+  `evaluator_ready` (plus the toolkit and credentials stages of kernelgen).
 - `kernelgen` (`kernelgen_check.py`): requires `model.pt2` and `model.engine`
   in the artifact directory (the TensorRT output it waits for), then runs
   `yasp-toolkit kernelgen compile` as a subprocess with the reference, the
@@ -88,6 +107,13 @@ Every node either advances the state or records a failure stage in
   `kernelgen_result` and `kernelgen_speedup`. Stages: `kernelgen_eval`,
   `kernelgen_eval_results`, `kernelgen_eval_incorrect` (plus the toolkit and
   credentials stages above).
+- `release_evaluator` (`evaluator_check.py`): terminates the process in
+  `evaluator`, if any, killing it if it does not exit in time, and clears the
+  key. Reached from every outcome of `ensure_evaluator`, `kernelgen`, and
+  `evaluate_kernelgen`, so an evaluator the host started never outlives the
+  check and one it did not start is never touched. A failure to stop is the
+  stage `evaluator_release` only when no earlier failure is in state;
+  otherwise it is logged and the earlier failure is kept.
 - `success` / `failure` (`workflow.py`): set `outcome` and the
   `customer_message`: the benchmark numbers and the kernelgen speedup on
   success, or the message looked up by stage in `messages.py`.
