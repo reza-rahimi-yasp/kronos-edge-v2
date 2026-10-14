@@ -136,7 +136,9 @@ export, a copy of the model and its floating-point inputs is cast to the
 precision you chose, whatever precision you wrote the model in, so
 `model.onnx`, `model_simplified.onnx`, and `model.engine` all carry it;
 integer inputs are left alone. The eager run and the kernelgen reference
-(`model.pt2`) always use the model as you wrote it. TensorRT builds a
+(`model.pt2`) always use the model as you wrote it; the reference is traced
+from CPU copies of that uncast model and your inputs (see "Run the check").
+TensorRT builds a
 strongly typed engine, so the engine computes in exactly the types the ONNX
 carries. Changing `precision` and running again rewrites all the files in the
 same artifact directory.
@@ -249,8 +251,16 @@ with the engine's output at the same position by the configured metric, and
 every value is printed. A model that changes its inputs in place is fine:
 every stage runs it on copies of your inputs.
 
-Right after the forward pass, `torch.export` traces the same model and inputs
-into `model.pt2`, the reference kernelgen optimizes. The ONNX export then runs
+Right after the forward pass, `torch.export` traces independent CPU copies of
+the same model and inputs, uncast, into `model.pt2`, the reference kernelgen
+optimizes. The copies matter: the archive records the device the trace ran on
+in every weight, and the kernelgen service loads the reference with a torch
+built without CUDA, so a reference traced on the GPU fails there with
+`Torch not compiled with CUDA enabled` before any kernel is attempted. A CPU
+reference loads everywhere; it does not by itself make kernelgen succeed,
+which still depends on its candidates passing the evaluator's checks. The
+eager model and your inputs stay on the GPU for the steps that follow. The
+ONNX export then runs
 `torch.onnx.export(..., dynamo=True)` on the same model and inputs, `onnxsim`
 simplifies the result, and TensorRT builds a serialized engine from the
 simplified model at the configured precision. If the model uses an input's
@@ -287,7 +297,7 @@ On a failure, the files produced before it are kept.
 | `model_simplified.onnx` | The onnxsim simplification. |
 | `model.engine` | The serialized TensorRT engine, at the configured precision. Specific to this GPU and TensorRT version. |
 | `benchmark.json` | The latency statistics of both sides, the speedup, and the metric values, as printed. |
-| `model.pt2` | The `torch.export` reference of your model, as kernelgen's `reference.pt2`. |
+| `model.pt2` | The `torch.export` reference of your model, traced on CPU from an uncast copy, as kernelgen's `reference.pt2`. |
 | `kernel.py` | The optimized kernel kernelgen returned (its `module_source.py`). |
 | `kernelgen_report.json` | The kernelgen job's report. |
 | `kernelgen_eval.json` | The evaluator's results for `kernel.py`: correctness checks and speedup. |

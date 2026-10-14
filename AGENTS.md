@@ -23,7 +23,12 @@ decisions: do not add file listings, commands, or summaries here.
   directly (inference mode, Core ATen decompositions, `torch.export.save`),
   mirroring `yasp-toolkit kernelgen export`: the image has no yasp-agent and
   the host must not run user code. It is exported right after the eager pass
-  and from the uncast model.
+  and from the uncast model, traced on independent CPU copies of the model
+  and the inputs: the archive records the trace device, the kernelgen service
+  loads it with a torch built without CUDA, and a GPU-traced reference fails
+  there with `Torch not compiled with CUDA enabled`. The eager model and the
+  user's inputs in state are never moved. A loadable reference is all this
+  guarantees; kernelgen may still produce no kernel.
 - The kernelgen evaluation runs on this machine: `eval compare` is routed to
   the evaluator registered from it by the `eval_routing` setting, and the same
   key is passed to `kernelgen compile --eval-routing`. The setting is

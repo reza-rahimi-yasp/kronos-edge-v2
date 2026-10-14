@@ -1,5 +1,8 @@
 """The pt2 export check: right after the eager pass, the model is traced with torch.export and saved as the kernelgen reference."""
 
+import json
+import zipfile
+
 import torch
 
 from kronos_edge import eager_check, onnx_check, pt2_check
@@ -89,3 +92,110 @@ def test_unwritable_pt2_is_the_save_stage(monkeypatch, caplog, good_model, artif
     assert state["error"] == "pt2_save"
     assert "model.pt2" in state["error_detail"]
     assert [r.stage for r in error_records(caplog)] == ["pt2_save"]
+
+
+def tensors_of(model, inputs):
+    return [*model.parameters(), *model.buffers(), *inputs]
+
+
+def test_reference_is_traced_from_cpu_copies_that_leave_the_eager_model_and_inputs_alone(monkeypatch, good_model, artifacts):
+    """kernelgen loads the reference on a torch built without CUDA, so the trace runs on independent CPU copies:
+    the eager model and the user's inputs in state keep their objects, storage, values, dtypes, and mode."""
+    received = {}
+    real_export = pt2_check.export
+
+    def export(model, inputs):
+        received["model"], received["inputs"] = model, inputs
+        return real_export(model, inputs)
+
+    monkeypatch.setattr(pt2_check, "export", export)
+
+    state = eager_check.run(*good_model, artifacts, device="cpu")
+
+    assert state.get("error") is None
+    model, inputs = received["model"], received["inputs"]
+    assert model is not state["model"]
+    assert all(t.device.type == "cpu" for t in tensors_of(model, inputs))
+    assert model.training is state["model"].training is False
+    originals = tensors_of(state["model"], state["user_inputs"])
+    copies = tensors_of(model, inputs)
+    assert len(copies) == len(originals)
+    for copied, original in zip(copies, originals, strict=True):
+        assert copied is not original
+        assert copied.untyped_storage().data_ptr() != original.untyped_storage().data_ptr()
+        assert (copied.dtype, copied.shape) == (original.dtype, original.shape)
+        torch.testing.assert_close(copied, original)
+
+
+def test_a_trace_that_writes_to_its_model_or_inputs_cannot_reach_the_eager_ones(monkeypatch, good_model, artifacts):
+    real_export = pt2_check.export
+
+    def export(model, inputs):
+        with torch.no_grad():
+            for t in tensors_of(model, inputs):
+                t.fill_(7.0)
+        return real_export(model, inputs)
+
+    monkeypatch.setattr(pt2_check, "export", export)
+
+    state = eager_check.run(*good_model, artifacts, device="cpu")
+
+    assert state.get("error") is None
+    assert not any(bool((t == 7.0).all()) for t in tensors_of(state["model"], state["user_inputs"]))
+
+
+def test_cpu_copies_keep_every_dtype(artifacts):
+    """Copying is not casting: half weights and integer buffers and inputs reach the trace as they are."""
+
+    class Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.scale = torch.nn.Parameter(torch.ones(3, dtype=torch.float16))
+            self.register_buffer("shift", torch.tensor([1, 2, 3], dtype=torch.int64))
+
+        def forward(self, x, steps):
+            return x * self.scale + (self.shift + steps).to(x.dtype)
+
+    model = Model().eval()
+    inputs = (torch.ones(2, 3, dtype=torch.float16), torch.zeros(3, dtype=torch.int64))
+
+    copied_model, copied_inputs = pt2_check.cpu_copies(model, inputs)
+
+    for copied, original in zip(tensors_of(copied_model, copied_inputs), tensors_of(model, inputs), strict=True):
+        assert copied.dtype == original.dtype
+        assert copied.untyped_storage().data_ptr() != original.untyped_storage().data_ptr()
+    state = pt2_check.export_pt2({"model": model, "user_inputs": inputs, "artifacts_dir": artifacts})
+    assert state.get("error") is None
+    program = torch.export.load(str(artifacts / "model.pt2"))
+    assert program.state_dict["scale"].dtype == torch.float16
+    assert program.state_dict["shift"].dtype == torch.int64
+    assert [t.dtype for t in program.example_inputs[0]] == [torch.float16, torch.int64]
+
+
+def archive_devices(path):
+    """Every device recorded in the archive's JSON: the graph's values and the weights."""
+    devices = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            if isinstance(node.get("device"), dict):
+                devices.add(node["device"]["type"])
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    with zipfile.ZipFile(path) as archive:
+        for name in archive.namelist():
+            if name.endswith(".json"):
+                walk(json.loads(archive.read(name)))
+    return devices
+
+
+def test_saved_reference_records_only_cpu_devices(good_model, artifacts):
+    """The archive bakes in the trace device; cpu is the one every torch build can load."""
+    state = eager_check.run(*good_model, artifacts, device="cpu")
+
+    assert state.get("error") is None
+    assert archive_devices(artifacts / "model.pt2") == {"cpu"}

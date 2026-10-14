@@ -8,11 +8,17 @@ which is what ``yasp-toolkit kernelgen export`` produces and what
 ``kernelgen compile --reference`` expects; the toolkit itself cannot run here
 because the image has no yasp-agent and the host never runs user code. The
 model is exported as the user wrote it: precision is applied at the ONNX
-export only. The exported program stays in state and is written to the
-artifact directory as ``model.pt2`` with ``torch.export.save``, weights
+export only. It is traced from independent CPU copies of the model and the
+inputs: ``torch.export.save`` records the trace device in every weight and
+factory op, and a reference traced on the GPU fails to load with
+``Torch not compiled with CUDA enabled`` on the kernelgen service, whose
+torch has no CUDA. The eager model and the user's inputs in state are never
+moved or written to. The exported program stays in state and is written to
+the artifact directory as ``model.pt2`` with ``torch.export.save``, weights
 bundled.
 """
 
+import copy
 import re
 from pathlib import Path
 
@@ -36,6 +42,14 @@ class Pt2ExportFailed(RuntimeError):
         super().__init__(_ANSI.sub("", str(exc)).strip())
 
 
+def cpu_copies(model, inputs):
+    """Independent CPU copies of the model and the inputs, dtypes and mode kept; the originals are untouched.
+
+    Copies even when already on the CPU, so nothing the trace touches is shared with the eager model.
+    """
+    return copy.deepcopy(model).to("cpu"), tuple(t.detach().to("cpu", copy=True) for t in inputs)
+
+
 def export(model, inputs):
     """torch.export in inference mode, decomposed to Core ATen, as ``yasp-toolkit kernelgen export`` does."""
     with torch.no_grad():
@@ -50,9 +64,9 @@ def save(program, path) -> None:
 def export_pt2(state: State) -> State:
     stage = "pt2_capture"
     try:
-        logger.info("tracing with torch.export for the kernelgen reference", extra={"stage": stage})
+        logger.info("tracing CPU copies of the model and inputs with torch.export for the kernelgen reference", extra={"stage": stage})
         try:
-            program = export(state["model"], state["user_inputs"])
+            program = export(*cpu_copies(state["model"], state["user_inputs"]))
         except Exception as exc:
             raise Pt2ExportFailed(exc) from exc
 
