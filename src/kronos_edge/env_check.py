@@ -73,8 +73,9 @@ def match_environment(state: State) -> State:
         stage = "image_available"
         if not image_exists(environment.image):
             raise ValueError(
-                f"image {environment.image} not found; build it with: "
-                f"docker build -f {environment.dockerfile} -t {environment.image} ."
+                f"image {environment.image} not found; build it with the registry-key secret README.md describes "
+                f'under "Build the environment image": docker build --secret id=yasp-netrc,src=<netrc file> '
+                f"-f {environment.dockerfile} -t {environment.image} ."
             )
     except Exception as exc:
         return fail(logger, stage, exc)

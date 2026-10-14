@@ -150,6 +150,9 @@ def test_missing_image_is_reported_with_build_command(monkeypatch, caplog, env_f
     assert state["error"] == "image_available"
     assert "docker build" in state["customer_message"]
     assert REGISTRY["environments"][0]["image"] in state["customer_message"]
+    # The build needs the registry-key secret; a recovery command without it fails at the exporter's pip step.
+    assert "--secret id=yasp-netrc,src=" in state["customer_message"]
+    assert "README.md" in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == ["image_available"]
 
 

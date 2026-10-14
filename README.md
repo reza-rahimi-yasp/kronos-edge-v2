@@ -30,18 +30,30 @@ reports land in an artifact directory.
 
 ## Install
 
+`yasp-agent[gaia]` is published on the yasp package index, not on PyPI, and
+that index is read with a registry key: a scoped, long-lived key
+(`nexus-read`) exchanged from your Yasp API key as the
+[install guide](https://compile.yasp.ai/help/install/) describes (its
+exchange needs no package installed), or, once the toolkit is installed,
+printed by `yasp-toolkit registry key`. Put it in `REGISTRY_KEY` and hand it
+to pip through a netrc file, never on the command line, where it would show
+in process listings while pip runs. The file lives in a private temporary
+path and is removed when the subshell ends, success or failure:
+
 ```bash
-python -m venv .venv
-.venv/bin/pip install -r requirements.txt \
-    --extra-index-url "https://token:${REGISTRY_KEY}@nexus.yasp.ai/repository/pypi-hosted/simple/"
+(
+  set -e; umask 077
+  NETRC_FILE=$(mktemp); trap 'rm -f "$NETRC_FILE"' EXIT
+  printf 'machine nexus.yasp.ai\nlogin token\npassword %s\n' "$REGISTRY_KEY" > "$NETRC_FILE"
+  python -m venv .venv
+  NETRC="$NETRC_FILE" .venv/bin/pip install -r requirements.txt \
+      --extra-index-url https://nexus.yasp.ai/repository/pypi-hosted/simple/
+)
 ```
 
-`yasp-agent[gaia]` is published on the yasp package index, not on PyPI, so the
-extra index is needed, and that index is read with a registry key: a scoped,
-long-lived key (`nexus-read`) exchanged from your Yasp API key as the
-[install guide](https://compile.yasp.ai/help/install/) describes, or, once
-the toolkit is installed, printed by `yasp-toolkit registry key`. The
-"Build the environment image" section uses the same key. The index installs the `yasp-toolkit` command the kernelgen
+`NETRC` names the file pip reads credentials from, so the index URL stays
+credential-free. The same key builds the environment image (see "Build the
+environment image"). The index installs the `yasp-toolkit` command the kernelgen
 steps run. The evaluator is not a package to install: it runs inside the
 official Gaia worker image (see "Set up your Yasp API key").
 
@@ -228,20 +240,25 @@ yasp's exporter, from the yasp package index named in "Install", which needs
 a registry key to read. The key goes to the build as a BuildKit secret: a
 netrc file the build mounts for that one `pip install` and nothing else, so
 it is never a build argument, an environment variable, part of a URL, or a
-layer of the image. Write the file with your registry key (minted as in
-"Install"; `yasp-toolkit registry key` prints one), build, then delete it:
+layer of the image. Write the file with your registry key (`yasp-toolkit
+registry key` prints one; the install guide's exchange works before the
+toolkit exists) in a private temporary path, build, and let the subshell
+remove it, success or failure:
 
 ```bash
-umask 077
-printf 'machine nexus.yasp.ai\nlogin token\npassword %s\n' "$(yasp-toolkit registry key)" > /tmp/yasp-netrc
-docker build --secret id=yasp-netrc,src=/tmp/yasp-netrc \
-    -f docker/rtx5090-cuda130/Dockerfile -t kronos-edge:rtx5090-cuda130 .
-rm /tmp/yasp-netrc
+(
+  set -e; umask 077
+  NETRC_FILE=$(mktemp); trap 'rm -f "$NETRC_FILE"' EXIT
+  printf 'machine nexus.yasp.ai\nlogin token\npassword %s\n' "$(yasp-toolkit registry key)" > "$NETRC_FILE"
+  docker build --secret id=yasp-netrc,src="$NETRC_FILE" \
+      -f docker/rtx5090-cuda130/Dockerfile -t kronos-edge:rtx5090-cuda130 .
+)
 ```
 
-The build fails without the secret. Running the check needs no key inside
-the container: the exporter it installs runs without one. Build the image
-once, and rebuild it after changing anything under `src/`.
+The build fails without the secret, and the check's "image is not built"
+message repeats this command with the secret flag. Running the check needs
+no key inside the container: the exporter it installs runs without one.
+Build the image once, and rebuild it after changing anything under `src/`.
 
 ## Run the check
 
@@ -351,7 +368,7 @@ and dtype of every input, `DEBUG` adds the full traceback of a failure.
 | The supported environment registry could not be loaded. Contact support. | Not something you can fix from the config. |
 | No supported environment matches config.yaml. | The detail line shows what you asked for and every supported environment. |
 | The GPU in this machine does not match the requested environment. | The environment exists but this machine cannot provide it. |
-| The Docker image for the requested environment is not built. | Run the `docker build` command shown in the detail line. |
+| The Docker image for the requested environment is not built. | Run the `docker build` command shown in the detail line, with the registry-key secret file "Build the environment image" describes. |
 | The check could not be run in the environment container. Contact support. | `docker run` failed before the check could report. |
 | The GPU could not be accessed inside the environment container. Contact support. | The container started but torch could not see the GPU. |
 | A package listed under dependencies in config.yaml could not be installed, or would replace a package the environment image carries. pip's output is below. | Check the requirement's spelling and version against the index, or, if pip reports a conflict with a constraint, pick a version of the package that works with the environment's torch; the detail shows what pip printed. |
