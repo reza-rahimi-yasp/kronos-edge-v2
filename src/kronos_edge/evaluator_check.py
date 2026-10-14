@@ -19,19 +19,23 @@ nodes:
   evaluator appears, for a bounded time. The container is recorded in state
   as ``evaluator``; an evaluator that was already registered is not.
 - ``release_evaluator``: stops the container in state, if any, then removes
-  it. The worker runs each task in a sibling container it creates through
-  the Docker socket under the launcher's fixed slot name, shared by every
-  worker on the machine, and tears it down when its task is cancelled, so
-  the worker is first asked to stop (``docker stop``, bounded: SIGTERM, then
-  the daemon kills it) and removed by force only after that. Once the worker
-  is gone, the slot is inspected: the worker is started with
+  it. As created here, the worker's launcher uses its default backend and
+  runs each task as a subprocess inside the worker container, so the task
+  ends with the worker. Configured for its Docker backend (which neither
+  this check nor the image does), it runs each task instead in a sibling
+  container it creates through the Docker socket under its fixed slot name,
+  shared by every worker on the machine, and tears it down when the task is
+  cancelled; so the worker is first asked to stop (``docker stop``, bounded:
+  SIGTERM, then the daemon kills it) and removed by force only after that.
+  Once the worker is gone, the slot is inspected: the worker is started with
   ``KRONOS_EVALUATOR=<container name>`` forwarded into its task containers,
   so a slot whose environment names this worker is its leftover and is
-  removed; one without that marker belongs to another worker and is never
-  touched. The graph runs the node after every outcome of the kernelgen
-  nodes, so a worker this check started never outlives the check; an
-  evaluator it did not start is never touched. A failure to remove is
-  reported only when nothing failed before it.
+  removed by the id that same inspect returned, never by the shared name,
+  which another worker's task may hold by then; one without that marker
+  belongs to another worker and is never touched. The graph runs the node
+  after every outcome of the kernelgen nodes, so a worker this check started
+  never outlives the check; an evaluator it did not start is never touched.
+  A failure to remove is reported only when nothing failed before it.
 
 ``yasp-eval`` names the executable inside the official worker image; the host
 installs no evaluator package and never runs it itself. The host needs only
@@ -70,11 +74,13 @@ WORKER_REGISTRY = "docker.yasp.ai"
 WORKER_REPOSITORY = f"{WORKER_REGISTRY}/yasp-eval/nvidia"
 WORKER_TAGS_URL = f"https://{WORKER_REGISTRY}/v2/yasp-eval/nvidia/tags/list"
 DOCKER_SOCKET = "/var/run/docker.sock"
-# The fixed name the worker's launcher gives the sibling container of each task (its documented default for
-# YASP_LAUNCH_DOCKER_SLOT_NAME), shared by every worker on the machine so their tasks take turns on the GPU.
+# The fixed name the worker's launcher gives a task's sibling container when its Docker backend is configured (its
+# documented default for YASP_LAUNCH_DOCKER_SLOT_NAME), shared by every worker on the machine so their tasks take turns on the GPU.
 TASK_SLOT = "yasp-launcher-slot"
 # Set on the worker to its container name and forwarded into its task containers, where it names their owner.
 OWNER_VARIABLE = "KRONOS_EVALUATOR"
+# One `docker inspect` answer carrying both the container's immutable id and the environment that names its owner.
+INSPECT_FORMAT = '{"id":{{json .Id}},"env":{{json .Config.Env}}}'
 # How long a started evaluator may take to appear in the listing, and how often the listing is asked.
 READY_TIMEOUT_S = 120.0
 POLL_INTERVAL_S = 5.0
@@ -188,23 +194,29 @@ def stop_worker(name: str) -> None:
         logger.warning("%s: %s; removing %s by force", type(exc).__name__, exc, name, extra={"stage": "evaluator_release"})
 
 
-def task_owner() -> str | None:
-    """The worker that started the task container holding the slot, read from the marker it forwarded; None without one."""
+def owned_task(name: str) -> str | None:
+    """The id of the task container holding the slot if the marker it was forwarded names the worker ``name``; None otherwise.
+
+    The id and the environment come from one inspect: the id is what the removal targets, since the shared
+    name may address another worker's task by then.
+    """
     try:
-        output = run_docker(["inspect", "--type", "container", "--format", "{{json .Config.Env}}", TASK_SLOT])
+        output = run_docker(["inspect", "--type", "container", "--format", INSPECT_FORMAT, TASK_SLOT])
     except DockerFailed as exc:
         if NO_SUCH_CONTAINER in str(exc):
             return None
         raise
-    prefix = f"{OWNER_VARIABLE}="
-    return next((entry.removeprefix(prefix) for entry in json.loads(output) or [] if entry.startswith(prefix)), None)
+    container = json.loads(output)
+    return container["id"] if f"{OWNER_VARIABLE}={name}" in (container["env"] or []) else None
 
 
 def remove_owned_task(name: str) -> None:
-    """Remove the task container the worker ``name`` left in the slot, if it is there; another worker's is never touched."""
-    if task_owner() == name:
-        logger.warning("the task container %s of %s is still running; removing it", TASK_SLOT, name, extra={"stage": "evaluator_release"})
-        remove_worker(TASK_SLOT)
+    """Remove the task container the worker ``name`` left in the slot, if it is there, by the id the inspect proved
+    is its own, never by the shared name; another worker's is never touched, and one gone meanwhile is removed."""
+    task = owned_task(name)
+    if task is not None:
+        logger.warning("the task container %s (%s) of %s is still running; removing it", TASK_SLOT, task[:12], name, extra={"stage": "evaluator_release"})
+        remove_worker(task)
 
 
 def prepare_worker() -> tuple[str, str]:

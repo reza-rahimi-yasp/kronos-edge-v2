@@ -80,15 +80,18 @@ worker; your API key stays on the host and never enters it or the
 model-check container, and no key is written to a log or a command line.
 The check waits up to two minutes for the worker to be listed and stops
 that one container when the check ends, whether it succeeded, failed, or
-was interrupted. The worker runs each evaluation in a sibling container
-under the launcher's shared slot name `yasp-launcher-slot`, so it is first
-asked to stop (`docker stop`, up to 30 s) and cancels its running task,
-tearing that sibling down, before the container is removed. The check then
-inspects the slot and removes the sibling only if it was this worker's,
-which it tells from the `KRONOS_EVALUATOR` marker the worker forwards into
-its tasks; a sibling started by another worker on this machine is never
-touched. The pulled image and the `yasp-dataset-cache` volume stay for the
-next run.
+was interrupted. The worker is first asked to stop (`docker stop`, up to
+30 s) so it cancels its running evaluation, then removed. As started here,
+the worker runs each evaluation inside its own container, so the
+evaluation ends with it. A worker whose launcher is configured for its
+Docker backend runs each evaluation instead in a sibling container under
+the shared slot name `yasp-launcher-slot` and tears it down on cancel; the
+check then inspects the slot and removes the sibling only if it was this
+worker's, which it tells from the `KRONOS_EVALUATOR` marker the worker
+forwards into its tasks, and only by the id that inspect returned, so a
+sibling started by another worker on this machine is never touched, even
+one that takes the name meanwhile. The pulled image and the
+`yasp-dataset-cache` volume stay for the next run.
 Unlike the guide's deployment, this worker has no restart policy, health
 check, or autoheal sidecar: it lives for one check. Its output is kept out
 of the check's output and shown only if it exits before registering. The
@@ -356,7 +359,7 @@ and dtype of every input, `DEBUG` adds the full traceback of a failure.
 | Docker is not available for starting the Gaia worker: the docker command or /var/run/docker.sock was not found. Install Docker with the NVIDIA container runtime on this machine. | The worker is a container with the NVIDIA runtime and access to `/var/run/docker.sock`. |
 | No evaluator for your config's gpu and eval_routing is registered, and the Gaia worker could not be started on this machine or exited before registering. The detail below names the step that failed or shows the worker's output. | The detail is the Docker or toolkit command that failed with what it printed (registry access, the NVIDIA runtime, the socket's permissions), or the worker's own output when it exited. |
 | No evaluator for your config's gpu and eval_routing is registered, and the Gaia worker started on this machine did not register in time. Check the gpu it advertises and that the service is reachable. | The worker ran for two minutes without being listed for your `gpu` and `eval_routing`. The detail names both and the container. |
-| The Gaia worker container this check started could not be removed. Remove the kronos-eval container named below yourself. | `docker rm -f <name>` for the container the detail names (the worker, or its `yasp-launcher-slot` task container); evaluators the check did not start are never touched. |
+| The Gaia worker container this check started could not be removed. Remove the kronos-eval container named below yourself. | `docker rm -f <container>` for the container the detail names (the worker by name, or its `yasp-launcher-slot` task container by id); evaluators the check did not start are never touched. |
 | The kernelgen optimization did not produce a kernel. The toolkit's output is below. | The kernelgen job failed or the service could not be reached; the detail shows the toolkit's output, including the task id. |
 | The kernelgen kernel could not be evaluated on this machine. The toolkit's output is below. | The evaluation task failed, or the evaluator dropped out after the check found it registered; the detail shows the toolkit's output. |
 | The evaluator's results for the kernelgen kernel could not be read. Contact support. | Not something you can fix from the model. |

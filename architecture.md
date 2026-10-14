@@ -119,15 +119,19 @@ first, which keeps the error it was given.
   credentials stages above).
 - `release_evaluator` (`evaluator_check.py`): stops the container named in
   `evaluator`, if any, with `docker stop` bounded by a grace period, so the
-  worker cancels its running task and tears down the sibling container the
-  launcher runs it in (named `yasp-launcher-slot`, shared by every worker
-  on the machine), then removes it with `docker rm --force` (one already
-  gone counts as removed), reaps the attached client, killing it if it does
-  not exit, and clears the key. With the worker gone it inspects the slot:
-  the worker was created with `KRONOS_EVALUATOR=<container name>` in
-  `YASP_LAUNCH_DOCKER_FORWARD_ENV`, so a slot whose environment carries that
-  marker for this worker is its leftover and is removed; a slot without it
-  is another worker's task and is left alone. Reached from every outcome of `ensure_evaluator`,
+  worker cancels its running task (run by the launcher's default backend as
+  a subprocess inside the worker, or, when its Docker backend is configured,
+  in a sibling container named `yasp-launcher-slot`, shared by every worker
+  on the machine, which the cancel tears down), then removes it with
+  `docker rm --force` (one already gone counts as removed), reaps the
+  attached client, killing it if it does not exit, and clears the key. With
+  the worker gone it inspects the slot, reading its id and environment in
+  one answer: the worker was created with `KRONOS_EVALUATOR=<container
+  name>` in `YASP_LAUNCH_DOCKER_FORWARD_ENV`, so a slot whose environment
+  carries that marker for this worker is its leftover and is removed by
+  that id, never by the name, which another worker's task may have taken
+  since (one gone by then counts as removed); a slot without the marker is
+  another worker's task and is left alone. Reached from every outcome of `ensure_evaluator`,
   `kernelgen`, and `evaluate_kernelgen`, so a worker the host started never
   outlives the check and one it did not start is never touched. A failure to remove is the
   stage `evaluator_release` only when no earlier failure is in state;

@@ -735,32 +735,63 @@ def task_env(owner):
     return env + ([f"KRONOS_EVALUATOR={owner}"] if owner else [])
 
 
+class FakeDaemon:
+    """The containers of a fake daemon, each a name and an immutable id over an environment, addressed by either as Docker does."""
+
+    def __init__(self):
+        self.containers = {}  # name -> (id, environment)
+        self.created = 0
+
+    def add(self, name, env):
+        """Create a container under `name`, replacing one that holds it, and return its new id."""
+        self.created += 1
+        self.containers[name] = (f"{self.created:064x}", env)
+        return self.containers[name][0]
+
+    def find(self, reference):
+        """The name of the container `reference` (a name or an id) addresses; None when there is none."""
+        return next((name for name, (cid, _) in self.containers.items() if reference in (name, cid)), None)
+
+    def env(self, name):
+        return self.containers[name][1]
+
+    def __contains__(self, name):
+        return name in self.containers
+
+
 @pytest.fixture
 def daemon(monkeypatch, docker):
-    """The containers of a fake daemon, name -> environment, behind the recorded `inspect`, `stop`, and `rm`.
+    """A fake daemon behind the recorded `create`, `inspect`, `stop`, and `rm`.
 
-    Besides this check's worker, a host may hold someone else's persistent worker and the launcher's task
-    slot, which every worker on the machine shares. `inspect` answers for a name in the table and fails as
-    Docker does for one that is not; `stop` ends the attached client; `rm` drops the name.
+    Besides this check's worker, which `create` adds, a host may hold someone else's persistent worker and
+    the launcher's task slot, which every worker on the machine shares. `inspect` answers with the id and
+    environment of the container a name or id addresses and fails as Docker does for one that is not
+    there, as does `rm`; `stop` ends the attached client; `rm` drops the container addressed.
     """
-    containers = {OTHER_WORKER: ["YASP_API_KEY=theirs", "YASP_LAUNCH_DOCKER_FORWARD_ENV=YASP_DATASET_CACHE_DIR"]}
+    daemon = FakeDaemon()
+    daemon.add(OTHER_WORKER, ["YASP_API_KEY=theirs", "YASP_LAUNCH_DOCKER_FORWARD_ENV=YASP_DATASET_CACHE_DIR"])
     recorded = evaluator_check.run_docker
 
     def run_docker(args, **kwargs):
-        name = args[-1]
-        if args[0] == "inspect":
-            docker.calls.append((args, kwargs))
-            if name not in containers:
-                raise DockerFailed(f"docker {' '.join(args)} exited 1\nError response from daemon: No such container: {name}")
-            return json.dumps(containers[name])
-        if args[0] == "stop":
+        reference = args[-1]
+        if args[0] == "create":
+            daemon.add(option(args, "--name"), [args[i + 1] for i, arg in enumerate(args) if arg == "-e"])
+        elif args[0] in ("inspect", "rm"):
+            name = daemon.find(reference)
+            if name is None:
+                docker.calls.append((args, kwargs))
+                raise DockerFailed(f"docker {' '.join(args)} exited 1\nError response from daemon: No such container: {reference}")
+            if args[0] == "inspect":
+                docker.calls.append((args, kwargs))
+                cid, env = daemon.containers[name]
+                return json.dumps({"id": cid, "env": env})
+            daemon.containers.pop(name)
+        elif args[0] == "stop":
             docker.client.code = 143
-        elif args[0] == "rm":
-            containers.pop(name, None)
         return recorded(args, **kwargs)
 
     monkeypatch.setattr(evaluator_check, "run_docker", run_docker)
-    return containers
+    return daemon
 
 
 def named(calls, name):
@@ -795,13 +826,13 @@ def test_stop_stops_the_worker_gracefully_then_removes_it_and_reaps_the_client(d
 def test_stop_removes_the_task_slot_only_when_this_workers_task_holds_it(docker, daemon, caplog, owner, removed):
     """The slot is shared: after the worker is gone, its own task is removed, anyone else's is left alone."""
     evaluator = REAL_START(["register"])
-    daemon[TASK_SLOT] = task_env(evaluator.name if owner == "this" else owner)
+    task = daemon.add(TASK_SLOT, task_env(evaluator.name if owner == "this" else owner))
 
     REAL_STOP(evaluator)
 
     assert (TASK_SLOT not in daemon) is removed
-    assert named(docker.calls, TASK_SLOT) == (["inspect", "rm"] if removed else ["inspect"])
-    assert docker.calls[-1][0] == (["rm", "--force", TASK_SLOT] if removed else ["inspect", "--type", "container", "--format", "{{json .Config.Env}}", TASK_SLOT])
+    assert named(docker.calls, TASK_SLOT) == ["inspect"] and named(docker.calls, task) == (["rm"] if removed else [])
+    assert docker.calls[-1][0] == (["rm", "--force", task] if removed else ["inspect", "--type", "container", "--format", evaluator_check.INSPECT_FORMAT, TASK_SLOT])
     assert OTHER_WORKER in daemon and named(docker.calls, OTHER_WORKER) == []
     assert evaluator.name not in daemon
     assert [r.stage for r in caplog.records if r.levelname == "WARNING"] == (["evaluator_release"] if removed else [])
@@ -815,6 +846,42 @@ def test_stop_leaves_a_free_slot_and_an_unrelated_worker_alone(docker, daemon):
     assert named(docker.calls, TASK_SLOT) == ["inspect"]
     assert OTHER_WORKER in daemon and named(docker.calls, OTHER_WORKER) == []
     assert evaluator.name not in daemon
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        pytest.param(OTHER_WORKER, id="another_workers_task_took_the_name"),
+        pytest.param(None, id="the_slot_is_gone"),
+    ],
+)
+def test_stop_removes_the_inspected_task_by_id_so_a_task_that_takes_the_name_meanwhile_survives(monkeypatch, docker, daemon, caplog, replacement):
+    """The shared name is resolved once, by the inspect that proves ownership: the removal targets the id it
+    returned, so a task of another worker that takes the name in between is untouched and the owned task
+    being gone by then is the removal done."""
+    evaluator = REAL_START(["register"])
+    owned = daemon.add(TASK_SLOT, task_env(evaluator.name))
+    with_daemon = evaluator_check.run_docker
+
+    def run_docker(args, **kwargs):
+        output = with_daemon(args, **kwargs)
+        if args[0] == "inspect" and args[-1] == TASK_SLOT:
+            daemon.containers.pop(TASK_SLOT)
+            if replacement:
+                daemon.add(TASK_SLOT, task_env(replacement))
+        return output
+
+    monkeypatch.setattr(evaluator_check, "run_docker", run_docker)
+
+    REAL_STOP(evaluator)
+
+    assert (TASK_SLOT in daemon) is bool(replacement)
+    if replacement:
+        assert daemon.env(TASK_SLOT) == task_env(replacement)
+    assert named(docker.calls, TASK_SLOT) == ["inspect"]
+    assert named(docker.calls, owned) == ["rm"] and docker.calls[-1][0] == ["rm", "--force", owned]
+    assert evaluator.name not in daemon and OTHER_WORKER in daemon
+    assert error_records(caplog) == []
 
 
 @pytest.mark.parametrize(
@@ -836,7 +903,7 @@ def test_a_graceful_stop_that_fails_is_logged_and_the_worker_is_still_removed(mo
 
     monkeypatch.setattr(evaluator_check, "run_docker", run_docker)
     evaluator = REAL_START(["register"])
-    daemon[TASK_SLOT] = task_env(evaluator.name)
+    daemon.add(TASK_SLOT, task_env(evaluator.name))
     docker.client.code = 137
 
     REAL_STOP(evaluator)
