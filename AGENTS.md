@@ -24,8 +24,11 @@ decisions: do not add file listings, commands, or summaries here.
   functions `yasp-toolkit kernelgen export` runs, never by a hand-written
   equivalent: the image carries `yasp-compile-common` for this alone, pinned
   in the Dockerfile and installed under constraints so the registry versions
-  stay, and not the toolkit; the exporter needs no key, so no credential
-  enters the container, and the host must not run user code. The package is
+  stay, and not the toolkit. The yasp package index is read with a scoped
+  registry key, so the build takes one as a BuildKit secret (a netrc file
+  mounted for that step alone), never as a build argument, environment
+  variable, URL, or layer; the exporter needs no key at run time, so no
+  credential enters the container, and the host must not run user code. The package is
   imported in the node, so an image without it is a stage, not a crash. It
   is exported right after the eager pass
   and from the uncast model, traced on independent CPU copies of the model
@@ -162,8 +165,8 @@ decisions: do not add file listings, commands, or summaries here.
   crashing the container before it can write the report.
 - Models above the 2 GB protobuf limit are saved with external data and
   checked by path. The onnxsim step is unverified above that size.
-- `yasp-agent[gaia]` comes from the yasp package index, not PyPI; the
-  `README.md` install command names the index. Credentials are documented in
+- `yasp-agent[gaia]` comes from the yasp package index, not PyPI, read with
+  a registry key; the `README.md` install command names the index. Credentials are documented in
   `.env.example` only; nothing reads a `.env` file.
 
 ## Node conventions

@@ -33,12 +33,15 @@ reports land in an artifact directory.
 ```bash
 python -m venv .venv
 .venv/bin/pip install -r requirements.txt \
-    --extra-index-url http://nexus.yasp.localdomain/repository/pypi-proxy/simple/ \
-    --trusted-host nexus.yasp.localdomain
+    --extra-index-url "https://token:${REGISTRY_KEY}@nexus.yasp.ai/repository/pypi-hosted/simple/"
 ```
 
 `yasp-agent[gaia]` is published on the yasp package index, not on PyPI, so the
-extra index is needed. It installs the `yasp-toolkit` command the kernelgen
+extra index is needed, and that index is read with a registry key: a scoped,
+long-lived key (`nexus-read`) exchanged from your Yasp API key as the
+[install guide](https://compile.yasp.ai/help/install/) describes, or, once
+the toolkit is installed, printed by `yasp-toolkit registry key`. The
+"Build the environment image" section uses the same key. The index installs the `yasp-toolkit` command the kernelgen
 steps run. The evaluator is not a package to install: it runs inside the
 official Gaia worker image (see "Set up your Yasp API key").
 
@@ -221,13 +224,24 @@ Each supported environment has a Dockerfile under `docker/` and a Docker image
 tag in `environments.yaml`. The eager check runs inside that image with the
 GPU attached, so the check refuses to run until the image exists on this
 machine. The build installs `yasp-compile-common`, the package holding
-yasp's exporter, from the yasp package index named in "Install", so that
-index must be reachable while building; no key is involved. Build it once,
-and rebuild it after changing anything under `src/`:
+yasp's exporter, from the yasp package index named in "Install", which needs
+a registry key to read. The key goes to the build as a BuildKit secret: a
+netrc file the build mounts for that one `pip install` and nothing else, so
+it is never a build argument, an environment variable, part of a URL, or a
+layer of the image. Write the file with your registry key (minted as in
+"Install"; `yasp-toolkit registry key` prints one), build, then delete it:
 
 ```bash
-docker build -f docker/rtx5090-cuda130/Dockerfile -t kronos-edge:rtx5090-cuda130 .
+umask 077
+printf 'machine nexus.yasp.ai\nlogin token\npassword %s\n' "$(yasp-toolkit registry key)" > /tmp/yasp-netrc
+docker build --secret id=yasp-netrc,src=/tmp/yasp-netrc \
+    -f docker/rtx5090-cuda130/Dockerfile -t kronos-edge:rtx5090-cuda130 .
+rm /tmp/yasp-netrc
 ```
+
+The build fails without the secret. Running the check needs no key inside
+the container: the exporter it installs runs without one. Build the image
+once, and rebuild it after changing anything under `src/`.
 
 ## Run the check
 
