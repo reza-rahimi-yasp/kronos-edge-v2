@@ -10,10 +10,13 @@ because the image has no yasp-agent and the host never runs user code. The
 model is exported as the user wrote it: precision is applied at the ONNX
 export only. It is traced from independent CPU copies of the model and the
 inputs: ``torch.export.save`` records the trace device in every weight and
-factory op, and a reference traced on the GPU fails to load with
-``Torch not compiled with CUDA enabled`` on the kernelgen service, whose
-torch has no CUDA. The eager model and the user's inputs in state are never
-moved or written to. The exported program stays in state and is written to
+factory op, and a reference traced on the GPU failed on the kernelgen
+service with ``Torch not compiled with CUDA enabled``, the error a torch
+built without CUDA raises when loading such an archive, while CPU-traced
+references were accepted (the service's build is inferred from that, not
+observed). The copies remove that loading failure and nothing more. The
+eager model and the user's inputs in state are never moved or written to.
+The exported program stays in state and is written to
 the artifact directory as ``model.pt2`` with ``torch.export.save``, weights
 bundled.
 """

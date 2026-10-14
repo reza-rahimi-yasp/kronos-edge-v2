@@ -254,13 +254,17 @@ every stage runs it on copies of your inputs.
 Right after the forward pass, `torch.export` traces independent CPU copies of
 the same model and inputs, uncast, into `model.pt2`, the reference kernelgen
 optimizes. The copies matter: the archive records the device the trace ran on
-in every weight, and the kernelgen service loads the reference with a torch
-built without CUDA, so a reference traced on the GPU fails there with
-`Torch not compiled with CUDA enabled` before any kernel is attempted. A CPU
-reference loads everywhere; it does not by itself make kernelgen succeed,
-which still depends on its candidates passing the evaluator's checks. The
-eager model and your inputs stay on the GPU for the steps that follow. The
-ONNX export then runs
+in every weight, and a torch built without CUDA cannot load an archive traced
+on the GPU (`Torch not compiled with CUDA enabled`). That is the error the
+kernelgen service reported for a GPU-traced reference, before any kernel was
+attempted, so the service is taken to load references on such a build; its
+internals are not observable from here. Tracing on CPU removes that loading
+failure, which is what was demonstrated: CPU-traced references passed the
+service's loading stage. It does not by itself make kernelgen succeed, which
+still depends on its candidates passing the evaluator's checks, and a model
+that itself places tensors on the GPU inside `forward` still records CUDA in
+the trace. The eager model and your inputs stay on the GPU for the steps that
+follow. The ONNX export then runs
 `torch.onnx.export(..., dynamo=True)` on the same model and inputs, `onnxsim`
 simplifies the result, and TensorRT builds a serialized engine from the
 simplified model at the configured precision. If the model uses an input's

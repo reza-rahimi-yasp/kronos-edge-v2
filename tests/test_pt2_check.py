@@ -99,8 +99,9 @@ def tensors_of(model, inputs):
 
 
 def test_reference_is_traced_from_cpu_copies_that_leave_the_eager_model_and_inputs_alone(monkeypatch, good_model, artifacts):
-    """kernelgen loads the reference on a torch built without CUDA, so the trace runs on independent CPU copies:
-    the eager model and the user's inputs in state keep their objects, storage, values, dtypes, and mode."""
+    """A GPU-traced reference failed to load on the kernelgen service as it does on a torch built without CUDA, so
+    the trace runs on independent CPU copies: the eager model and the user's inputs in state keep their objects,
+    storage, values, dtypes, and mode."""
     received = {}
     real_export = pt2_check.export
 
@@ -194,7 +195,7 @@ def archive_devices(path):
 
 
 def test_saved_reference_records_only_cpu_devices(good_model, artifacts):
-    """The archive bakes in the trace device; cpu is the one every torch build can load."""
+    """The archive bakes in the trace device; a cpu archive is the one shown to load on a torch built without CUDA."""
     state = eager_check.run(*good_model, artifacts, device="cpu")
 
     assert state.get("error") is None
