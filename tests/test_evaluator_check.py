@@ -6,6 +6,8 @@ around them, the listing parser against the toolkit's table, the real process he
 shell scripts, and that only an evaluator the check started is ever stopped.
 """
 
+import os
+import signal
 import subprocess
 import time
 
@@ -13,6 +15,7 @@ import pytest
 
 from conftest import CONFIG, evaluator_listing, fake_toolkit
 from kronos_edge import evaluator_check, kernelgen_check
+from kronos_edge.workflow import main
 from test_eager_check import CONV_RELU, TYPO, X, error_records, run, write_model, write_npz
 from test_kernelgen_check import INVALID_TOKEN_RESPONSE, MISSING_TOKEN_PANEL, eval_fails, failing_toolkit, option
 
@@ -32,7 +35,7 @@ def listing_toolkit(calls, evaluators, before=(), after=None):
     key it was started with. Every command is appended to `calls`.
     """
 
-    def toolkit(args):
+    def toolkit(args, timeout=None):
         calls.append(args)
         if args[:2] != ["eval", "workers"]:
             return fake_toolkit(args)
@@ -81,7 +84,7 @@ def test_the_evaluator_is_started_before_being_listed_and_stopped_after_the_eval
     events = []
     real_start, real_stop = evaluators.start, evaluators.stop
 
-    def toolkit(args):
+    def toolkit(args, timeout=None):
         events.append(args[:2])
         return listing_toolkit([], evaluators)(args)
 
@@ -120,7 +123,7 @@ def test_readiness_polls_until_the_evaluator_is_listed(tmp_path, monkeypatch, en
     calls = []
     listings = []
 
-    def toolkit(args):
+    def toolkit(args, timeout=None):
         calls.append(args)
         if args[:2] != ["eval", "workers"]:
             return fake_toolkit(args)
@@ -199,7 +202,7 @@ def test_a_missing_yasp_eval_command_is_a_stage(tmp_path, monkeypatch, caplog, e
     "toolkit, stage, fragment",
     [
         pytest.param(
-            lambda args: (_ for _ in ()).throw(FileNotFoundError(2, "No such file or directory", "yasp-toolkit")),
+            lambda args, timeout=None: (_ for _ in ()).throw(FileNotFoundError(2, "No such file or directory", "yasp-toolkit")),
             "kernelgen_toolkit", "yasp-agent", id="toolkit_not_installed",
         ),
         pytest.param(failing_toolkit(1, stderr=MISSING_TOKEN_PANEL), "kernelgen_credentials", "YASP_API_KEY", id="no_api_key"),
@@ -221,7 +224,7 @@ def test_listing_failures_are_stages_and_start_nothing(tmp_path, monkeypatch, ca
     assert not (tmp_path / ".artifact" / "kernel.py").exists()
 
 
-def compile_fails(args):
+def compile_fails(args, timeout=None):
     if args[:2] == ["kernelgen", "compile"]:
         return subprocess.CompletedProcess(["yasp-toolkit", *args], 1, stdout="", stderr="╭─ Failure reason ─╮\n│ worker exploded │\n╰──╯\n")
     return fake_toolkit(args)
@@ -237,7 +240,7 @@ def compile_fails(args):
 def test_a_started_evaluator_is_stopped_when_a_later_node_fails(tmp_path, monkeypatch, caplog, env_files, good_model, evaluators, toolkit, stage):
     calls = []
     listing = listing_toolkit(calls, evaluators)
-    monkeypatch.setattr(kernelgen_check, "run_toolkit", lambda args: listing(args) if args[:2] == ["eval", "workers"] else toolkit(args))
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", lambda args, timeout=None: listing(args) if args[:2] == ["eval", "workers"] else toolkit(args))
 
     state = run(env_files, *good_model)
 
@@ -282,7 +285,7 @@ def test_a_stop_failure_is_a_stage_only_when_nothing_else_failed(tmp_path, monke
 
 def test_a_stop_failure_does_not_hide_the_failure_that_came_first(tmp_path, monkeypatch, caplog, env_files, good_model, evaluators):
     listing = listing_toolkit([], evaluators)
-    monkeypatch.setattr(kernelgen_check, "run_toolkit", lambda args: listing(args) if args[:2] == ["eval", "workers"] else compile_fails(args))
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", lambda args, timeout=None: listing(args) if args[:2] == ["eval", "workers"] else compile_fails(args))
     monkeypatch.setattr(evaluator_check, "stop_evaluator", lambda e: (_ for _ in ()).throw(PermissionError("not permitted")))
 
     state = run(env_files, *good_model)
@@ -290,6 +293,151 @@ def test_a_stop_failure_does_not_hide_the_failure_that_came_first(tmp_path, monk
     assert state["error"] == "kernelgen_compile"
     assert "worker exploded" in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == ["kernelgen_compile", "evaluator_release"]
+
+
+def test_the_inventory_listing_is_bounded_and_a_hung_one_is_a_stage(tmp_path, monkeypatch, caplog, env_files, good_model, evaluators):
+    """A listing that never answers is killed at its timeout, which run_toolkit reports as TimeoutExpired."""
+    timeouts = []
+
+    def toolkit(args, timeout=None):
+        timeouts.append(timeout)
+        raise subprocess.TimeoutExpired(["yasp-toolkit", *args], timeout)
+
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", toolkit)
+
+    state = run(env_files, *good_model)
+
+    assert state["outcome"] == "failure"
+    assert state["error"] == "evaluator_inventory"
+    assert "timed out" in state["customer_message"]
+    assert [r.stage for r in error_records(caplog)] == ["evaluator_inventory"]
+    assert timeouts == [evaluator_check.LISTING_TIMEOUT_S]
+    assert evaluators.started == [] and evaluators.stopped == []
+
+
+def test_readiness_listings_are_bounded_by_the_time_left_to_the_deadline(tmp_path, monkeypatch, env_files, good_model, evaluators):
+    timeouts = []
+
+    def toolkit(args, timeout=None):
+        if args[:2] != ["eval", "workers"]:
+            return fake_toolkit(args)
+        if evaluators.started:
+            timeouts.append(timeout)
+        rows = [(GPU, ROUTING)] if len(timeouts) == 3 else []
+        return subprocess.CompletedProcess(["yasp-toolkit", *args], 0, stdout=evaluator_listing(*rows), stderr="")
+
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", toolkit)
+    monkeypatch.setattr(evaluator_check, "READY_TIMEOUT_S", 30)
+
+    state = run(env_files, *good_model)
+
+    assert state["outcome"] == "success"
+    assert len(timeouts) == 3
+    assert all(0 < t <= 30 for t in timeouts)
+    assert timeouts == sorted(timeouts, reverse=True)  # each listing gets what is left, never more
+
+
+def test_a_listing_that_hangs_while_waiting_for_readiness_stops_the_evaluator(tmp_path, monkeypatch, caplog, env_files, good_model, evaluators):
+    calls = []
+    listing = listing_toolkit(calls, evaluators)
+
+    def toolkit(args, timeout=None):
+        if args[:2] == ["eval", "workers"] and evaluators.started:
+            raise subprocess.TimeoutExpired(["yasp-toolkit", *args], timeout)
+        return listing(args)
+
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", toolkit)
+
+    state = run(env_files, *good_model)
+
+    assert state["outcome"] == "failure"
+    assert state["error"] == "evaluator_ready"
+    assert "timed out" in state["customer_message"]
+    assert [r.stage for r in error_records(caplog)] == ["evaluator_ready"]
+    assert evaluators.stopped == evaluators.started and len(evaluators.started) == 1
+    assert ["kernelgen", "compile"] not in commands(calls)
+
+
+def interrupted_toolkit(calls, evaluators, command, before=()):
+    """`listing_toolkit`, except that `command` raises KeyboardInterrupt, as Ctrl-C does while a command runs.
+
+    A listing raises only once an evaluator was started, so the interrupt lands in the readiness wait.
+    """
+    listing = listing_toolkit(calls, evaluators, before=before)
+
+    def toolkit(args, timeout=None):
+        if args[:2] == command and (command != ["eval", "workers"] or evaluators.started):
+            raise KeyboardInterrupt
+        return listing(args)
+
+    return toolkit
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param(["eval", "workers"], id="while_waiting_for_readiness"),
+        pytest.param(["kernelgen", "compile"], id="during_kernelgen"),
+        pytest.param(["eval", "compare"], id="during_the_evaluation"),
+    ],
+)
+def test_an_interrupt_stops_the_evaluator_the_check_started(tmp_path, monkeypatch, caplog, env_files, good_model, evaluators, command):
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", interrupted_toolkit([], evaluators, command))
+
+    with pytest.raises(KeyboardInterrupt):
+        run(env_files, *good_model)
+
+    assert evaluators.stopped == evaluators.started and len(evaluators.started) == 1
+    assert error_records(caplog) == []
+
+
+def test_an_interrupt_leaves_an_evaluator_the_check_did_not_start_alone(tmp_path, monkeypatch, env_files, good_model, evaluators):
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", interrupted_toolkit([], evaluators, ["kernelgen", "compile"], before=[(GPU, ROUTING)]))
+
+    with pytest.raises(KeyboardInterrupt):
+        run(env_files, *good_model)
+
+    assert evaluators.started == [] and evaluators.stopped == []
+
+
+def test_a_stop_failure_during_an_interrupt_is_logged_and_the_interrupt_is_kept(tmp_path, monkeypatch, caplog, env_files, good_model, evaluators):
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", interrupted_toolkit([], evaluators, ["kernelgen", "compile"]))
+    monkeypatch.setattr(evaluator_check, "stop_evaluator", lambda e: (_ for _ in ()).throw(PermissionError("not permitted")))
+
+    with pytest.raises(KeyboardInterrupt):
+        run(env_files, *good_model)
+
+    assert [r.stage for r in error_records(caplog)] == ["evaluator_release"]
+
+
+@pytest.fixture
+def signal_handlers():
+    """main() installs handlers for the termination signals; put the previous ones back after the test."""
+    saved = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGHUP)}
+    yield
+    for signum, handler in saved.items():
+        signal.signal(signum, handler)
+
+
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGHUP], ids=["sigterm", "sighup"])
+def test_main_stops_a_started_evaluator_when_the_process_is_signalled(tmp_path, monkeypatch, env_files, good_model, evaluators, signal_handlers, signum):
+    """`kill`, a supervisor, or a closed terminal: the signal ends the check through the same cleanup as an interrupt."""
+    listing = listing_toolkit([], evaluators)
+
+    def toolkit(args, timeout=None):
+        if args[:2] == ["kernelgen", "compile"]:
+            os.kill(os.getpid(), signum)  # delivered to this thread before the stub returns
+        return listing(args)
+
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", toolkit)
+    config, environments = env_files
+    model, npz = good_model
+
+    with pytest.raises(SystemExit) as info:
+        main([str(config), str(model), str(npz), "--environments", str(environments)])
+
+    assert info.value.code == 128 + signum
+    assert evaluators.stopped == evaluators.started and len(evaluators.started) == 1
 
 
 # `eval workers` as the toolkit prints it at 200 columns: a wide Tags column wraps a row onto a

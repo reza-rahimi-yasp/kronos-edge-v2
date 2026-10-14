@@ -1,6 +1,7 @@
 """Workflow: validate the environment on the host, run the checks in the container, then the evaluator and kernelgen on the host."""
 
 import argparse
+import signal
 from pathlib import Path
 
 from langgraph.graph import END, START, StateGraph
@@ -80,16 +81,19 @@ def run_check(
     config_path, model_path, npz_path,
     environments_path=DEFAULT_ENVIRONMENTS, artifacts_path=DEFAULT_ARTIFACTS, log_level="INFO",
 ) -> State:
-    return build_graph().invoke(
-        {
-            "config_path": str(config_path),
-            "environments_path": str(environments_path),
-            "model_path": str(model_path),
-            "npz_path": str(npz_path),
-            "artifacts_path": str(artifacts_path),
-            "log_level": log_level,
-        }
-    )
+    try:
+        return build_graph().invoke(
+            {
+                "config_path": str(config_path),
+                "environments_path": str(environments_path),
+                "model_path": str(model_path),
+                "npz_path": str(npz_path),
+                "artifacts_path": str(artifacts_path),
+                "log_level": log_level,
+            }
+        )
+    finally:
+        evaluator_check.release_active_evaluator()
 
 
 def main(argv=None) -> int:
@@ -102,6 +106,14 @@ def main(argv=None) -> int:
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args(argv)
     configure(args.log_level)
+
+    def terminate(signum, _frame):
+        evaluator_check.release_active_evaluator()
+        raise SystemExit(128 + signum)
+
+    previous = {signum: signal.getsignal(signum) for signum in (signal.SIGTERM, signal.SIGHUP)}
+    for signum in previous:
+        signal.signal(signum, terminate)
     state = run_check(
         args.config_path, args.model_path, args.npz_path,
         environments_path=args.environments, artifacts_path=args.artifacts, log_level=args.log_level,

@@ -58,16 +58,18 @@ class ToolkitFailed(RuntimeError):
     """The toolkit exited with an error, or returned without the file it was asked for; the message is its output."""
 
 
-def run_toolkit(args: list[str]) -> subprocess.CompletedProcess:
+def run_toolkit(args: list[str], timeout: float | None = None) -> subprocess.CompletedProcess:
     """Run yasp-toolkit with ``args``, capturing its output; a missing command raises FileNotFoundError."""
     # COLUMNS: the toolkit renders panels; at the 80 columns it assumes without a terminal they wrap mid-sentence.
-    return subprocess.run([TOOLKIT, *args], capture_output=True, text=True, env={**os.environ, "COLUMNS": "200"})
+    return subprocess.run(
+        [TOOLKIT, *args], capture_output=True, text=True, env={**os.environ, "COLUMNS": "200"}, timeout=timeout,
+    )
 
 
-def run_logged(stage: str, args: list[str]) -> tuple[subprocess.CompletedProcess, str]:
+def run_logged(stage: str, args: list[str], timeout: float | None = None) -> tuple[subprocess.CompletedProcess, str]:
     """Run the toolkit and return the result with its combined output; the output goes to the log, and to the detail on failure."""
     logger.info("running %s %s", TOOLKIT, " ".join(args), extra={"stage": stage})
-    result = run_toolkit(args)
+    result = run_toolkit(args, timeout=timeout)
     output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part and part.strip())
     for line in output.splitlines():
         logger.debug("%s: %s", TOOLKIT, line, extra={"stage": stage})

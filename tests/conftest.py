@@ -173,7 +173,7 @@ def evaluator_listing(*rows):
     return "\n".join(lines) + "\n"
 
 
-def fake_toolkit(args, result=PASSING_RESULT):
+def fake_toolkit(args, result=PASSING_RESULT, timeout=None):
     """What a successful yasp-toolkit run leaves behind: the kernel and report, or the results.json.
 
     `eval workers` lists an evaluator advertising the config's GPU under the routing key asked for,
