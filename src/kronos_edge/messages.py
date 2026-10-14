@@ -81,10 +81,10 @@ BENCHMARK = {
 
 EVALUATOR = {
     "evaluator_inventory": "The evaluators registered for the kernelgen evaluation could not be listed. The toolkit's output is below.",
-    "evaluator_command": "The yasp-eval command is not available. Install yasp-compile-eval into the environment that runs the check.",
-    "evaluator_start": "No evaluator for your config's gpu and eval_routing is registered, and the one started on this machine exited before registering. Its output is below.",
-    "evaluator_ready": "No evaluator for your config's gpu and eval_routing is registered, and the one started on this machine did not register in time. Check the gpu it advertises and that the service is reachable.",
-    "evaluator_release": "The evaluator started on this machine for the kernelgen evaluation could not be stopped. Stop the yasp-eval process yourself.",
+    "evaluator_command": "Docker is not available for starting the Gaia worker: the docker command or /var/run/docker.sock was not found. Install Docker with the NVIDIA container runtime on this machine.",
+    "evaluator_start": "No evaluator for your config's gpu and eval_routing is registered, and the Gaia worker could not be started on this machine or exited before registering. The detail below names the step that failed or shows the worker's output.",
+    "evaluator_ready": "No evaluator for your config's gpu and eval_routing is registered, and the Gaia worker started on this machine did not register in time. Check the gpu it advertises and that the service is reachable.",
+    "evaluator_release": "The Gaia worker container this check started could not be removed. Remove the kronos-eval container named below yourself.",
 }
 
 KERNELGEN = {

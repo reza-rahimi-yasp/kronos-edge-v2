@@ -20,11 +20,13 @@ reports land in an artifact directory.
 ## Requirements
 
 - Python 3.12 or newer
-- The packages in `requirements.txt` (`langgraph`, `numpy`, `onnx`, `onnxscript`, `onnxsim`, `pydantic`, `pyyaml`, `torch`, `yasp-agent[gaia]`, `yasp-compile-eval`)
+- The packages in `requirements.txt` (`langgraph`, `numpy`, `onnx`, `onnxscript`, `onnxsim`, `pydantic`, `pyyaml`, `torch`, `yasp-agent[gaia]`)
 - Docker with the NVIDIA container runtime, and `nvidia-smi` on the path
 - A Yasp API key for the kernelgen steps (see below)
-- The CUDA toolkit's `nvcc` on the path, for the evaluator the check starts on
-  this machine when none is registered (see below)
+- Access to `docker.yasp.ai` and to the local Docker socket
+  (`/var/run/docker.sock`), for the Gaia worker the check starts when no
+  evaluator is registered (see below). The worker image carries the CUDA
+  build toolchain; nothing beyond Docker is needed on this machine for it.
 
 ## Install
 
@@ -35,10 +37,10 @@ python -m venv .venv
     --trusted-host nexus.yasp.localdomain
 ```
 
-`yasp-agent` and `yasp-compile-eval` are published on the yasp package index,
-not on PyPI, so the extra index is needed. They install the `yasp-toolkit`
-command the kernelgen steps run and the `yasp-eval` command that serves as the
-evaluator.
+`yasp-agent[gaia]` is published on the yasp package index, not on PyPI, so the
+extra index is needed. It installs the `yasp-toolkit` command the kernelgen
+steps run. The evaluator is not a package to install: it runs inside the
+official Gaia worker image (see "Set up your Yasp API key").
 
 The package lives under `src/`, so set `PYTHONPATH=src` when running it from
 a checkout. The examples below do that.
@@ -61,14 +63,40 @@ The kernelgen evaluation runs on an evaluator registered under the routing
 key of your config (`eval_routing`, below) and advertising your config's
 `gpu`. Before kernelgen, the check lists the evaluators registered under that
 key (`yasp-toolkit eval workers`). If one advertises your `gpu`, it is used
-and left as it is. Otherwise the check starts one on this machine with
-`yasp-eval register --tag routing=<key>`, which reads the same API key,
-detects the GPU and the CUDA build toolchain (`nvcc` must be on the path),
-and registers; the check waits up to two minutes for it to be listed and
-stops it when the check ends, whether it succeeded or failed. The evaluator's
-own output is kept out of the check's output and shown only if it exits
-before registering. The routing key is required, so the evaluation is always
-pinned to that evaluator.
+and left as it is. Otherwise the check starts a Gaia worker on this machine
+the way the [Gaia Docker worker guide](https://compile.yasp.ai/help/gaia/workers/docker/)
+does: it mints a registry key and a registration key from your API key
+(`yasp-toolkit registry key`, `yasp-toolkit eval key`), pulls the newest
+release of the official NVIDIA worker image from `docker.yasp.ai` under a
+temporary Docker login that leaves your own Docker credentials untouched,
+and starts a container named `kronos-eval-<unique id>` running
+`yasp-eval register --tag routing=<key>`. `yasp-eval` here is the
+executable inside that image, not something installed on this machine: no
+evaluator package and no CUDA toolkit are needed on the host. The worker
+gets the NVIDIA runtime, the Docker socket, and the dataset cache the guide
+lists, so it can run its per-task evaluation containers, and it detects its
+own GPU. Only the registration key, scoped to registering, enters the
+worker; your API key stays on the host and never enters it or the
+model-check container, and no key is written to a log or a command line.
+The check waits up to two minutes for the worker to be listed and stops
+that one container when the check ends, whether it succeeded, failed, or
+was interrupted. The worker is first asked to stop (`docker stop`, up to
+30 s) so it cancels its running evaluation, then removed. As started here,
+the worker runs each evaluation inside its own container, so the
+evaluation ends with it. A worker whose launcher is configured for its
+Docker backend runs each evaluation instead in a sibling container under
+the shared slot name `yasp-launcher-slot` and tears it down on cancel; the
+check then inspects the slot and removes the sibling only if it was this
+worker's, which it tells from the `KRONOS_EVALUATOR` marker the worker
+forwards into its tasks, and only by the id that inspect returned, so a
+sibling started by another worker on this machine is never touched, even
+one that takes the name meanwhile. The pulled image and the
+`yasp-dataset-cache` volume stay for the next run.
+Unlike the guide's deployment, this worker has no restart policy, health
+check, or autoheal sidecar: it lives for one check. Its output is kept out
+of the check's output and shown only if it exits before registering. The
+routing key is required, so the evaluation is always pinned to that
+evaluator.
 
 ## Prepare your config file
 
@@ -232,7 +260,7 @@ for small models and can take minutes for large ones; there is no timeout.
 
 Once the container has produced the reference and the engine, the check makes
 sure an evaluator for your `gpu` and `eval_routing` is registered, starting
-`yasp-eval register` on this machine when none is (see "Set up your Yasp API
+a Gaia worker container on this machine when none is (see "Set up your Yasp API
 key"). It then runs
 `yasp-toolkit kernelgen compile` on this machine with your `model.py` as the
 source and your config's `gpu` as the target, and waits for the kernelgen
@@ -241,8 +269,8 @@ job; the optimized kernel is written as `kernel.py`. It then runs
 this machine's evaluator. The kernel must pass the evaluator's correctness
 checks; the speedup the evaluator measured is printed, and no expectation is
 derived from the TensorRT engine or the eager run. Kernelgen jobs take
-minutes; the toolkit's progress goes to the log. An evaluator the check
-started is stopped once the evaluation is over, or as soon as a step fails.
+minutes; the toolkit's progress goes to the log. A Gaia worker the check
+started is removed once the evaluation is over, or as soon as a step fails.
 
 ## Artifact directory
 
@@ -328,10 +356,10 @@ and dtype of every input, `DEBUG` adds the full traceback of a failure.
 | The yasp-toolkit command is not available. Install yasp-agent[gaia] into the environment that runs the check. | Install the packages in `requirements.txt` with the yasp index. |
 | No Yasp API key was found, or the key was not accepted. Export a valid YASP_API_KEY (see .env.example) or store one with `yasp-toolkit keyring set`. | See "Set up your Yasp API key". If a key is set, the service rejected it: create a new one. |
 | The evaluators registered for the kernelgen evaluation could not be listed. The toolkit's output is below. | The service could not be reached or rejected the request; the detail shows the toolkit's output. |
-| The yasp-eval command is not available. Install yasp-compile-eval into the environment that runs the check. | Install the packages in `requirements.txt` with the yasp index. |
-| No evaluator for your config's gpu and eval_routing is registered, and the one started on this machine exited before registering. Its output is below. | The detail shows what `yasp-eval register` printed: typically a missing `nvcc` on the path, or the service being unreachable. |
-| No evaluator for your config's gpu and eval_routing is registered, and the one started on this machine did not register in time. Check the gpu it advertises and that the service is reachable. | The evaluator ran for two minutes without being listed for your `gpu` and `eval_routing`. The detail names both. |
-| The evaluator started on this machine for the kernelgen evaluation could not be stopped. Stop the yasp-eval process yourself. | Find the `yasp-eval register` process and stop it; the detail shows the OS error. |
+| Docker is not available for starting the Gaia worker: the docker command or /var/run/docker.sock was not found. Install Docker with the NVIDIA container runtime on this machine. | The worker is a container with the NVIDIA runtime and access to `/var/run/docker.sock`. |
+| No evaluator for your config's gpu and eval_routing is registered, and the Gaia worker could not be started on this machine or exited before registering. The detail below names the step that failed or shows the worker's output. | The detail is the Docker or toolkit command that failed with what it printed (registry access, the NVIDIA runtime, the socket's permissions), or the worker's own output when it exited. |
+| No evaluator for your config's gpu and eval_routing is registered, and the Gaia worker started on this machine did not register in time. Check the gpu it advertises and that the service is reachable. | The worker ran for two minutes without being listed for your `gpu` and `eval_routing`. The detail names both and the container. |
+| The Gaia worker container this check started could not be removed. Remove the kronos-eval container named below yourself. | `docker rm -f <container>` for the container the detail names (the worker by name, or its `yasp-launcher-slot` task container by id); evaluators the check did not start are never touched. |
 | The kernelgen optimization did not produce a kernel. The toolkit's output is below. | The kernelgen job failed or the service could not be reached; the detail shows the toolkit's output, including the task id. |
 | The kernelgen kernel could not be evaluated on this machine. The toolkit's output is below. | The evaluation task failed, or the evaluator dropped out after the check found it registered; the detail shows the toolkit's output. |
 | The evaluator's results for the kernelgen kernel could not be read. Contact support. | Not something you can fix from the model. |

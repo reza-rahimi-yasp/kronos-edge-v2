@@ -1,20 +1,26 @@
 """The evaluator check: before kernelgen, the host makes sure an evaluator for the config's gpu and eval_routing is registered.
 
-`yasp-toolkit eval workers` lists the evaluators and `yasp-eval register` starts one, so both are
-replaced by autouse fixtures (`toolkit_stub`, `evaluators`); the tests here cover the two nodes
-around them, the listing parser against the toolkit's table, the real process helpers against
-shell scripts, and that only an evaluator the check started is ever stopped.
+`yasp-toolkit eval workers` lists the evaluators and a Gaia worker container runs one, so both
+are replaced by autouse fixtures (`toolkit_stub`, `evaluators`); the tests here cover the two
+nodes around them, the listing parser against the toolkit's table, the worker lifecycle helpers
+against recorded Docker and toolkit commands (nothing shells out, no key is minted, no image is
+pulled), and that only the worker the check started is ever removed.
 """
 
+import json
 import os
 import signal
 import subprocess
 import time
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from conftest import CONFIG, evaluator_listing, fake_toolkit
 from kronos_edge import evaluator_check, kernelgen_check
+from kronos_edge.evaluator_check import DockerFailed
+from kronos_edge.kernelgen_check import MissingCredentials, ToolkitFailed
 from kronos_edge.workflow import main
 from test_eager_check import CONV_RELU, TYPO, X, error_records, run, write_model, write_npz
 from test_kernelgen_check import INVALID_TOKEN_RESPONSE, MISSING_TOKEN_PANEL, eval_fails, failing_toolkit, option
@@ -25,7 +31,12 @@ REAL_STOP = evaluator_check.stop_evaluator
 
 GPU, ROUTING = CONFIG["gpu"], CONFIG["eval_routing"]
 
-NVCC_MISSING = "Build toolchain incomplete — cannot compile candidate kernels:\n  - missing nvcc (CUDA toolkit)\n"
+REPO = Path(__file__).resolve().parents[1]
+IMAGE = "docker.yasp.ai/yasp-eval/nvidia:1.10.0"
+# Shaped like the JWTs the toolkit's key commands print; never a real key.
+REGISTRY_KEY = "eyJ0.registry-scope.sig1"
+WORKER_KEY = "eyJ0.eval-register-scope.sig2"
+RUNTIME_MISSING = "docker: Error response from daemon: unknown or invalid runtime name: nvidia.\n"
 
 
 def listing_toolkit(calls, evaluators, before=(), after=None):
@@ -160,7 +171,7 @@ def test_an_evaluator_that_never_registers_is_stopped_and_kernelgen_is_skipped(t
 @pytest.mark.parametrize(
     "exit, stage, fragment",
     [
-        pytest.param((1, NVCC_MISSING), "evaluator_start", "nvcc", id="toolchain_incomplete"),
+        pytest.param((125, RUNTIME_MISSING), "evaluator_start", "runtime name", id="container_could_not_start"),
         pytest.param((1, "Could not reach router: timeout\n"), "evaluator_start", "reach router", id="router_unreachable"),
         pytest.param((1, MISSING_TOKEN_PANEL), "kernelgen_credentials", "YASP_API_KEY", id="no_api_key"),
         pytest.param((0, ""), "evaluator_start", "exited 0", id="exited_cleanly"),
@@ -176,26 +187,38 @@ def test_an_evaluator_that_exits_before_registering_is_a_stage(tmp_path, monkeyp
     assert state["outcome"] == "failure"
     assert state["error"] == stage
     assert fragment in state["customer_message"]
+    assert evaluators.started[0].name in state["customer_message"]  # the container whose output this is
     assert [r.stage for r in error_records(caplog)] == [stage]
     assert evaluators.stopped == evaluators.started and len(evaluators.started) == 1
     assert ["kernelgen", "compile"] not in commands(calls)
 
 
-def test_a_missing_yasp_eval_command_is_a_stage(tmp_path, monkeypatch, caplog, env_files, good_model, evaluators):
+@pytest.mark.parametrize(
+    "failure, stage, fragment",
+    [
+        pytest.param(FileNotFoundError(2, "No such file or directory", "docker"), "evaluator_command", "Docker", id="docker_not_installed"),
+        pytest.param(FileNotFoundError(2, "No such file or directory", "/var/run/docker.sock"), "evaluator_command", "Docker", id="no_docker_socket"),
+        pytest.param(FileNotFoundError(2, "No such file or directory", "yasp-toolkit"), "kernelgen_toolkit", "yasp-agent", id="toolkit_gone_before_the_key_mint"),
+        pytest.param(MissingCredentials("yasp-toolkit eval key found no valid Yasp API key"), "kernelgen_credentials", "YASP_API_KEY", id="key_mint_rejected"),
+        pytest.param(ToolkitFailed("yasp-toolkit registry key exited 1 without printing a key"), "evaluator_start", "without printing a key", id="key_mint_failed"),
+        pytest.param(DockerFailed("docker pull docker.yasp.ai/yasp-eval/nvidia:1.10.0 exited 1\nunauthorized"), "evaluator_start", "unauthorized", id="pull_failed"),
+        pytest.param(subprocess.TimeoutExpired(["docker", "pull", IMAGE], 1800), "evaluator_start", "timed out", id="pull_hung"),
+    ],
+)
+def test_a_startup_failure_before_the_worker_exists_is_a_stage_and_stops_nothing(tmp_path, monkeypatch, caplog, env_files, good_model, evaluators, failure, stage, fragment):
+    """What `start_evaluator` raises before it has a container: the stage follows the command that failed."""
     calls = []
     monkeypatch.setattr(kernelgen_check, "run_toolkit", listing_toolkit(calls, evaluators))
-    monkeypatch.setattr(
-        evaluator_check, "start_evaluator",
-        lambda args: (_ for _ in ()).throw(FileNotFoundError(2, "No such file or directory", "yasp-eval")),
-    )
+    monkeypatch.setattr(evaluator_check, "start_evaluator", lambda args: (_ for _ in ()).throw(failure))
 
     state = run(env_files, *good_model)
 
     assert state["outcome"] == "failure"
-    assert state["error"] == "evaluator_command"
-    assert "yasp-compile-eval" in state["customer_message"]
-    assert [r.stage for r in error_records(caplog)] == ["evaluator_command"]
+    assert state["error"] == stage
+    assert fragment in state["customer_message"]
+    assert [r.stage for r in error_records(caplog)] == [stage]
     assert evaluators.stopped == [] and commands(calls) == [["eval", "workers"]]
+    assert state.get("evaluator") is None
 
 
 @pytest.mark.parametrize(
@@ -476,56 +499,465 @@ def test_listing_parser_reports_no_match_and_no_table():
         evaluator_check.listed("╭─ GET /evaluators ─╮\n│ HTTP 503 │\n╰──╯\n", GPU, ROUTING)
 
 
-def write_script(tmp_path, body):
-    script = tmp_path / "fake-yasp-eval"
-    script.write_text(f"#!/bin/sh\n{body}\n")
-    script.chmod(0o755)
-    return script
+class FakeClient:
+    """Stand in for the `docker start --attach` client: alive until `code` is set."""
+
+    def __init__(self):
+        self.pid, self.code, self.waits = 123, None, []
+
+    def poll(self):
+        return self.code
+
+    def wait(self, timeout=None):
+        self.waits.append(timeout)
+        if self.code is None:
+            raise subprocess.TimeoutExpired(["docker", "start", "--attach"], timeout)
+        return self.code
 
 
-def test_real_start_and_stop_run_the_command_capture_its_output_and_terminate_it(tmp_path, monkeypatch):
-    monkeypatch.setattr(evaluator_check, "EVALUATOR", str(write_script(tmp_path, "echo registering $1 $2 $3\necho oops >&2\nsleep 30")))
+@pytest.fixture
+def docker(monkeypatch):
+    """Record every Docker and toolkit command the worker helpers would run, without running any.
 
-    evaluator = REAL_START(["register", "--tag", "routing=x"])
-    try:
-        assert evaluator.exit_code() is None
-        deadline = time.monotonic() + 10
-        while "oops" not in evaluator.output() and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert "registering register --tag routing=x" in evaluator.output()
-        assert "oops" in evaluator.output()  # stderr is captured with stdout
-        REAL_STOP(evaluator)
-        assert evaluator.exit_code() is not None
-        assert evaluator.process.returncode < 0  # ended by our signal, not on its own
-    finally:
-        if evaluator.exit_code() is None:
-            evaluator.process.kill()
+    Keys come back from the recorded toolkit as JWT-shaped strings that are never real; `calls` is
+    the ordered list of (command args, keyword arguments) for `run_docker` and `attach_worker`.
+    """
+    calls = []
+    client = FakeClient()
 
+    def run_docker(args, **kwargs):
+        calls.append((args, kwargs))
+        if args[0] == "inspect":  # nothing holds the task slot
+            raise DockerFailed(f"docker {' '.join(args)} exited 1\nError response from daemon: No such container: {args[-1]}")
+        return "container-id"
 
-def test_real_stop_kills_a_command_that_ignores_the_terminate_signal(tmp_path, monkeypatch):
-    monkeypatch.setattr(evaluator_check, "EVALUATOR", str(write_script(tmp_path, "trap '' TERM\nwhile true; do sleep 1; done")))
-    monkeypatch.setattr(evaluator_check, "STOP_TIMEOUT_S", 0.5)
+    def attach_worker(name, log):
+        calls.append((["start", "--attach", name], {"log": log}))
+        log.write("API Key OK\n")
+        log.flush()
+        return client
 
-    evaluator = REAL_START(["register"])
-    try:
-        REAL_STOP(evaluator)
-        assert evaluator.exit_code() is not None
-    finally:
-        if evaluator.exit_code() is None:
-            evaluator.process.kill()
+    monkeypatch.setattr(evaluator_check, "run_docker", run_docker)
+    monkeypatch.setattr(evaluator_check, "attach_worker", attach_worker)
+    monkeypatch.setattr(evaluator_check, "worker_key", lambda args: {"registry": REGISTRY_KEY, "eval": WORKER_KEY}[args[0]])
+    monkeypatch.setattr(evaluator_check, "worker_tags", lambda key: ["1.9.0", "latest", "1.10.0", "1.11.0-rc1"])
+    monkeypatch.setattr(evaluator_check, "docker_socket_gid", lambda: "998")
+    return SimpleNamespace(calls=calls, client=client)
 
 
-def test_real_start_reports_a_missing_command(tmp_path, monkeypatch):
-    monkeypatch.setattr(evaluator_check, "EVALUATOR", str(tmp_path / "no-such-yasp-eval"))
+def docker_commands(calls):
+    return [args[0] if not args[0].startswith("--") else args[2] for args, _ in calls]
 
-    with pytest.raises(FileNotFoundError, match="no-such-yasp-eval"):
+
+def test_the_worker_is_created_as_the_documented_deployment_with_only_the_scoped_key(monkeypatch, docker, capfd):
+    """The `docker create` mirrors the Gaia Docker guide's `docker run`, minus the persistent parts (restart policy,
+    autoheal label, health check), with the registration key read from the client's environment, never an argument."""
+    monkeypatch.setenv("YASP_API_KEY", "main-api-key")
+
+    evaluator = REAL_START(["register", "--tag", f"routing={ROUTING}"])
+
+    assert docker_commands(docker.calls) == ["login", "pull", "create", "start"]
+    create, options = docker.calls[2]
+    assert create[-5:] == [IMAGE, "yasp-eval", "register", "--tag", f"routing={ROUTING}"]
+    assert option(create, "--name") == evaluator.name and evaluator.name.startswith("kronos-eval-")
+    assert option(create, "--runtime") == "nvidia"
+    assert option(create, "--group-add") == "998"
+    assert option(create, "-v") == "/var/run/docker.sock:/var/run/docker.sock"
+    env_flags = [create[i + 1] for i, flag in enumerate(create) if flag == "-e"]
+    # The owner marker is set on the worker and forwarded into its task containers, where the stop reads it back.
+    assert env_flags == [
+        "NVIDIA_VISIBLE_DEVICES=all", "YASP_API_KEY", f"YASP_LAUNCH_WORKER_IMAGE={IMAGE}", "YASP_LAUNCH_DOCKER_GPUS=all",
+        "YASP_LAUNCH_DOCKER_SHM_SIZE=8g", "YASP_LAUNCH_DOCKER_VOLUMES=yasp-dataset-cache:/mnt/dataset-cache",
+        "YASP_DATASET_CACHE_DIR=/mnt/dataset-cache", f"KRONOS_EVALUATOR={evaluator.name}",
+        "YASP_LAUNCH_DOCKER_FORWARD_ENV=YASP_DATASET_CACHE_DIR,KRONOS_EVALUATOR",
+    ]
+    assert not {"--restart", "--label", "--health-cmd", "--detach"} & set(create)
+    assert options["env"]["YASP_API_KEY"] == WORKER_KEY and options["secret"] == WORKER_KEY
+    assert docker.calls[3][0] == ["start", "--attach", evaluator.name]
+    # The keys travel through stdin and the environment only; the main key goes nowhere.
+    assert WORKER_KEY not in str([args for args, _ in docker.calls])
+    assert REGISTRY_KEY not in str([args for args, _ in docker.calls])
+    assert "main-api-key" not in str(docker.calls)
+    assert "API Key OK" in evaluator.output() and evaluator.exit_code() is None
+    assert capfd.readouterr().out == ""
+
+
+def test_the_newest_release_is_pulled_with_a_temporary_login(monkeypatch, docker):
+    """Keys are minted before the pull, the login lives in a temporary Docker config that is gone afterwards, and the
+    pull has its own bound: a first pull of the worker image is not charged to the readiness window."""
+    minted = []
+    monkeypatch.setattr(evaluator_check, "worker_key", lambda args: (minted.append(args), {"registry": REGISTRY_KEY, "eval": WORKER_KEY}[args[0]])[1])
+
+    assert evaluator_check.prepare_worker() == (IMAGE, WORKER_KEY)
+
+    assert minted == [["registry", "key"], ["eval", "key"]]
+    login, login_options = docker.calls[0]
+    pull, pull_options = docker.calls[1]
+    assert login[0] == "--config" and login[2:] == ["login", "docker.yasp.ai", "-u", "token", "--password-stdin"]
+    assert login_options["input"] == REGISTRY_KEY and login_options["secret"] == REGISTRY_KEY
+    assert pull[:2] == login[:2] and pull[2:] == ["pull", IMAGE]
+    assert pull_options["timeout"] == evaluator_check.PULL_TIMEOUT_S
+    assert not Path(login[1]).exists()
+
+
+@pytest.mark.parametrize("tags", [[], None, ["latest", "dev"]], ids=["empty", "null", "no_release"])
+def test_a_registry_without_a_release_fails_before_logging_in(monkeypatch, docker, tags):
+    monkeypatch.setattr(evaluator_check, "worker_tags", lambda key: tags)
+    with pytest.raises(DockerFailed, match="no release"):
+        evaluator_check.prepare_worker()
+    assert docker.calls == []
+
+
+def test_a_worker_key_is_the_toolkits_output(monkeypatch):
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", lambda args, timeout=None: subprocess.CompletedProcess(args, 0, WORKER_KEY + "\n", ""))
+    assert evaluator_check.worker_key(["eval", "key"]) == WORKER_KEY
+
+
+@pytest.mark.parametrize(
+    "returncode, stdout, stderr, error",
+    [
+        pytest.param(1, "secret.worker.key", "secret-error", ToolkitFailed, id="exit_nonzero"),
+        pytest.param(0, "", "secret-error", ToolkitFailed, id="no_key_printed"),
+        pytest.param(0, "Deprecated: secret-warning\n" + WORKER_KEY, "", ToolkitFailed, id="key_mixed_with_other_output"),
+        pytest.param(1, "", MISSING_TOKEN_PANEL, MissingCredentials, id="no_api_key"),
+        pytest.param(0, INVALID_TOKEN_RESPONSE, "", MissingCredentials, id="invalid_api_key"),
+    ],
+)
+def test_key_command_failures_never_expose_their_output(monkeypatch, caplog, returncode, stdout, stderr, error):
+    """A key command's output may be a key: it goes nowhere on failure, not into the error, the log, or the detail."""
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", lambda args, timeout=None: subprocess.CompletedProcess(args, returncode, stdout, stderr))
+
+    with pytest.raises(error) as info:
+        evaluator_check.worker_key(["eval", "key"])
+
+    assert "yasp-toolkit eval key" in str(info.value)
+    assert "secret" not in str(info.value) and WORKER_KEY not in str(info.value)
+    assert "secret" not in caplog.text and WORKER_KEY not in caplog.text
+
+
+def test_a_hung_key_command_is_bounded(monkeypatch):
+    timeouts = []
+
+    def toolkit(args, timeout=None):
+        timeouts.append(timeout)
+        raise subprocess.TimeoutExpired(["yasp-toolkit", *args], timeout)
+
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", toolkit)
+    with pytest.raises(subprocess.TimeoutExpired):
+        evaluator_check.worker_key(["registry", "key"])
+    assert timeouts == [evaluator_check.LISTING_TIMEOUT_S]
+
+
+def test_docker_failures_name_the_command_and_redact_the_secret(monkeypatch):
+    """`run_docker` is the one place a key is handed to Docker; its error carries the daemon's message with
+    the key blanked, so a failure that echoed it could not reach the customer message or the log."""
+    runs = []
+
+    def run(cmd, **kwargs):
+        runs.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, 1, "", f"Error response from daemon: login attempt with {REGISTRY_KEY} failed\n")
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+    with pytest.raises(DockerFailed) as info:
+        evaluator_check.run_docker(["login", "docker.yasp.ai", "-u", "token", "--password-stdin"], input=REGISTRY_KEY, secret=REGISTRY_KEY)
+
+    assert str(info.value).startswith("docker login docker.yasp.ai -u token --password-stdin exited 1\n")
+    assert REGISTRY_KEY not in str(info.value) and "login attempt with " in str(info.value)
+    assert runs[0][0][0] == "docker" and runs[0][1]["input"] == REGISTRY_KEY
+    assert runs[0][1]["timeout"] == evaluator_check.DOCKER_TIMEOUT_S and runs[0][1]["capture_output"]
+
+
+def test_docker_output_is_returned_stripped(monkeypatch):
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, "abc123\n", ""))
+    assert evaluator_check.run_docker(["create", "x"]) == "abc123"
+
+
+@pytest.mark.parametrize(
+    "failure, during",
+    [
+        pytest.param(DockerFailed("docker create exited 125\n" + RUNTIME_MISSING), "create", id="create_fails"),
+        pytest.param(KeyboardInterrupt(), "create", id="create_interrupted"),
+        pytest.param(OSError("spawn failed"), "start", id="attach_fails"),
+        pytest.param(KeyboardInterrupt(), "start", id="attach_interrupted"),
+    ],
+)
+def test_a_start_that_fails_or_is_interrupted_after_create_removes_its_container(monkeypatch, docker, caplog, failure, during):
+    """Once `docker create` has been asked, the container may exist whatever the client reported, so it is removed
+    by name on every failure after that point, and the failure itself is what propagates."""
+    real_run_docker = evaluator_check.run_docker
+
+    def run_docker(args, **kwargs):
+        if args[0] == during:
+            docker.calls.append((args, kwargs))
+            raise failure
+        return real_run_docker(args, **kwargs)
+
+    monkeypatch.setattr(evaluator_check, "run_docker", run_docker)
+    if during == "start":
+        monkeypatch.setattr(evaluator_check, "attach_worker", lambda name, log: (_ for _ in ()).throw(failure))
+
+    with pytest.raises(type(failure)) as info:
         REAL_START(["register"])
 
+    assert info.value is failure
+    name = option([args for args, _ in docker.calls if args[0] == "create"][0], "--name")
+    assert docker.calls[-1][0] == ["rm", "--force", name]
+    assert error_records(caplog) == []
 
-def test_real_start_does_not_write_to_this_processs_stdout(tmp_path, monkeypatch, capfd):
-    monkeypatch.setattr(evaluator_check, "EVALUATOR", str(write_script(tmp_path, "echo noise\nsleep 30")))
 
+def test_a_removal_failure_after_a_failed_start_is_logged_and_the_start_failure_is_kept(monkeypatch, docker, caplog):
+    failure = OSError("spawn failed")
+    monkeypatch.setattr(evaluator_check, "attach_worker", lambda name, log: (_ for _ in ()).throw(failure))
+    monkeypatch.setattr(evaluator_check, "remove_worker", lambda name: (_ for _ in ()).throw(DockerFailed(f"docker rm --force {name} exited 1\ndaemon gone")))
+
+    with pytest.raises(OSError) as info:
+        REAL_START(["register"])
+
+    assert info.value is failure
+    assert [(r.stage, "daemon gone" in r.getMessage()) for r in error_records(caplog)] == [("evaluator_release", True)]
+
+
+def test_a_failure_before_create_removes_nothing(monkeypatch, docker):
+    monkeypatch.setattr(evaluator_check, "worker_key", lambda args: (_ for _ in ()).throw(MissingCredentials("no key")))
+    with pytest.raises(MissingCredentials):
+        REAL_START(["register"])
+    assert docker.calls == []
+
+
+TASK_SLOT = "yasp-launcher-slot"
+OTHER_WORKER = "gaia-worker-persistent"
+
+
+def task_env(owner):
+    """The environment of a task container the launcher started: the image's plus what the worker forwarded."""
+    env = ["PATH=/opt/conda/bin:/usr/bin", "YASP_DATASET_CACHE_DIR=/mnt/dataset-cache"]
+    return env + ([f"KRONOS_EVALUATOR={owner}"] if owner else [])
+
+
+class FakeDaemon:
+    """The containers of a fake daemon, each a name and an immutable id over an environment, addressed by either as Docker does."""
+
+    def __init__(self):
+        self.containers = {}  # name -> (id, environment)
+        self.created = 0
+
+    def add(self, name, env):
+        """Create a container under `name`, replacing one that holds it, and return its new id."""
+        self.created += 1
+        self.containers[name] = (f"{self.created:064x}", env)
+        return self.containers[name][0]
+
+    def find(self, reference):
+        """The name of the container `reference` (a name or an id) addresses; None when there is none."""
+        return next((name for name, (cid, _) in self.containers.items() if reference in (name, cid)), None)
+
+    def env(self, name):
+        return self.containers[name][1]
+
+    def __contains__(self, name):
+        return name in self.containers
+
+
+@pytest.fixture
+def daemon(monkeypatch, docker):
+    """A fake daemon behind the recorded `create`, `inspect`, `stop`, and `rm`.
+
+    Besides this check's worker, which `create` adds, a host may hold someone else's persistent worker and
+    the launcher's task slot, which every worker on the machine shares. `inspect` answers with the id and
+    environment of the container a name or id addresses and fails as Docker does for one that is not
+    there, as does `rm`; `stop` ends the attached client; `rm` drops the container addressed.
+    """
+    daemon = FakeDaemon()
+    daemon.add(OTHER_WORKER, ["YASP_API_KEY=theirs", "YASP_LAUNCH_DOCKER_FORWARD_ENV=YASP_DATASET_CACHE_DIR"])
+    recorded = evaluator_check.run_docker
+
+    def run_docker(args, **kwargs):
+        reference = args[-1]
+        if args[0] == "create":
+            daemon.add(option(args, "--name"), [args[i + 1] for i, arg in enumerate(args) if arg == "-e"])
+        elif args[0] in ("inspect", "rm"):
+            name = daemon.find(reference)
+            if name is None:
+                docker.calls.append((args, kwargs))
+                raise DockerFailed(f"docker {' '.join(args)} exited 1\nError response from daemon: No such container: {reference}")
+            if args[0] == "inspect":
+                docker.calls.append((args, kwargs))
+                cid, env = daemon.containers[name]
+                return json.dumps({"id": cid, "env": env})
+            daemon.containers.pop(name)
+        elif args[0] == "stop":
+            docker.client.code = 143
+        return recorded(args, **kwargs)
+
+    monkeypatch.setattr(evaluator_check, "run_docker", run_docker)
+    return daemon
+
+
+def named(calls, name):
+    return [args[0] for args, _ in calls if args[-1] == name]
+
+
+def test_stop_stops_the_worker_gracefully_then_removes_it_and_reaps_the_client(docker, daemon):
+    """`docker stop` lets the worker cancel its task and tear down the task container; the removal follows."""
     evaluator = REAL_START(["register"])
+
     REAL_STOP(evaluator)
 
-    assert capfd.readouterr().out == ""
+    after_start = docker.calls[4:]
+    assert [args[0] for args, _ in after_start] == ["stop", "rm", "inspect"]
+    stop, options = after_start[0]
+    assert stop == ["stop", "--time", "30", evaluator.name]
+    assert options["timeout"] > evaluator_check.STOP_GRACE_S
+    assert after_start[1][0] == ["rm", "--force", evaluator.name]
+    assert after_start[2][0][-1] == TASK_SLOT
+    assert docker.client.waits == [evaluator_check.STOP_TIMEOUT_S]
+    assert evaluator.log.closed
+
+
+@pytest.mark.parametrize(
+    "owner, removed",
+    [
+        pytest.param("this", True, id="this_workers_task_still_running"),
+        pytest.param("kronos-eval-" + "0" * 32, False, id="another_checks_task"),
+        pytest.param(None, False, id="task_without_a_marker"),
+    ],
+)
+def test_stop_removes_the_task_slot_only_when_this_workers_task_holds_it(docker, daemon, caplog, owner, removed):
+    """The slot is shared: after the worker is gone, its own task is removed, anyone else's is left alone."""
+    evaluator = REAL_START(["register"])
+    task = daemon.add(TASK_SLOT, task_env(evaluator.name if owner == "this" else owner))
+
+    REAL_STOP(evaluator)
+
+    assert (TASK_SLOT not in daemon) is removed
+    assert named(docker.calls, TASK_SLOT) == ["inspect"] and named(docker.calls, task) == (["rm"] if removed else [])
+    assert docker.calls[-1][0] == (["rm", "--force", task] if removed else ["inspect", "--type", "container", "--format", evaluator_check.INSPECT_FORMAT, TASK_SLOT])
+    assert OTHER_WORKER in daemon and named(docker.calls, OTHER_WORKER) == []
+    assert evaluator.name not in daemon
+    assert [r.stage for r in caplog.records if r.levelname == "WARNING"] == (["evaluator_release"] if removed else [])
+
+
+def test_stop_leaves_a_free_slot_and_an_unrelated_worker_alone(docker, daemon):
+    evaluator = REAL_START(["register"])
+
+    REAL_STOP(evaluator)
+
+    assert named(docker.calls, TASK_SLOT) == ["inspect"]
+    assert OTHER_WORKER in daemon and named(docker.calls, OTHER_WORKER) == []
+    assert evaluator.name not in daemon
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        pytest.param(OTHER_WORKER, id="another_workers_task_took_the_name"),
+        pytest.param(None, id="the_slot_is_gone"),
+    ],
+)
+def test_stop_removes_the_inspected_task_by_id_so_a_task_that_takes_the_name_meanwhile_survives(monkeypatch, docker, daemon, caplog, replacement):
+    """The shared name is resolved once, by the inspect that proves ownership: the removal targets the id it
+    returned, so a task of another worker that takes the name in between is untouched and the owned task
+    being gone by then is the removal done."""
+    evaluator = REAL_START(["register"])
+    owned = daemon.add(TASK_SLOT, task_env(evaluator.name))
+    with_daemon = evaluator_check.run_docker
+
+    def run_docker(args, **kwargs):
+        output = with_daemon(args, **kwargs)
+        if args[0] == "inspect" and args[-1] == TASK_SLOT:
+            daemon.containers.pop(TASK_SLOT)
+            if replacement:
+                daemon.add(TASK_SLOT, task_env(replacement))
+        return output
+
+    monkeypatch.setattr(evaluator_check, "run_docker", run_docker)
+
+    REAL_STOP(evaluator)
+
+    assert (TASK_SLOT in daemon) is bool(replacement)
+    if replacement:
+        assert daemon.env(TASK_SLOT) == task_env(replacement)
+    assert named(docker.calls, TASK_SLOT) == ["inspect"]
+    assert named(docker.calls, owned) == ["rm"] and docker.calls[-1][0] == ["rm", "--force", owned]
+    assert evaluator.name not in daemon and OTHER_WORKER in daemon
+    assert error_records(caplog) == []
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(DockerFailed("docker stop --time 30 kronos-eval-x exited 1\ndaemon gone"), id="stop_fails"),
+        pytest.param(subprocess.TimeoutExpired(["docker", "stop"], 90), id="stop_hangs"),
+    ],
+)
+def test_a_graceful_stop_that_fails_is_logged_and_the_worker_is_still_removed(monkeypatch, docker, daemon, caplog, failure):
+    """The removal is the contract; a stop the daemon refuses or that hangs is logged and the force path follows."""
+    with_daemon = evaluator_check.run_docker
+
+    def run_docker(args, **kwargs):
+        if args[0] == "stop":
+            docker.calls.append((args, kwargs))
+            raise failure
+        return with_daemon(args, **kwargs)
+
+    monkeypatch.setattr(evaluator_check, "run_docker", run_docker)
+    evaluator = REAL_START(["register"])
+    daemon.add(TASK_SLOT, task_env(evaluator.name))
+    docker.client.code = 137
+
+    REAL_STOP(evaluator)
+
+    assert [args[0] for args, _ in docker.calls[4:]] == ["stop", "rm", "inspect", "rm"]
+    assert evaluator.name not in daemon and TASK_SLOT not in daemon
+    assert [r.stage for r in caplog.records if r.levelname == "WARNING"] == ["evaluator_release", "evaluator_release"]
+    assert error_records(caplog) == []
+
+
+def test_stop_kills_an_attached_client_that_does_not_exit(monkeypatch, docker):
+    killed = []
+    evaluator = REAL_START(["register"])
+
+    def killpg(pgid, signum):
+        killed.append((pgid, signum))
+        docker.client.code = -9
+
+    monkeypatch.setattr(os, "killpg", killpg)
+
+    REAL_STOP(evaluator)
+
+    assert killed == [(docker.client.pid, signal.SIGKILL)]
+    assert docker.client.waits == [evaluator_check.STOP_TIMEOUT_S, evaluator_check.STOP_TIMEOUT_S]
+    assert evaluator.log.closed
+
+
+def test_stop_tolerates_a_container_that_is_already_gone(monkeypatch, docker):
+    """`docker stop` and `rm --force` of a missing container exit 1; the goal, no container, is met."""
+    evaluator = REAL_START(["register"])
+    docker.client.code = 0
+    monkeypatch.setattr(evaluator_check, "run_docker", lambda args, **kwargs: (_ for _ in ()).throw(DockerFailed(f"docker {' '.join(args)} exited 1\nError response from daemon: No such container: {args[-1]}")))
+
+    REAL_STOP(evaluator)
+
+    assert evaluator.log.closed
+
+
+def test_a_stop_whose_removal_fails_still_reaps_the_client_and_reports_the_container(monkeypatch, docker):
+    evaluator = REAL_START(["register"])
+    docker.client.code = 0
+    monkeypatch.setattr(evaluator_check, "run_docker", lambda args, **kwargs: (_ for _ in ()).throw(DockerFailed(f"docker {' '.join(args)} exited 1\ndaemon gone")))
+
+    with pytest.raises(DockerFailed, match=f"rm --force {evaluator.name}"):
+        REAL_STOP(evaluator)
+
+    assert docker.client.waits == [evaluator_check.STOP_TIMEOUT_S]
+    assert evaluator.log.closed
+
+
+def test_the_host_depends_on_the_toolkit_and_no_standalone_evaluator_package():
+    """The evaluator is the `yasp-eval` executable inside the official worker image, never a host package."""
+    for name in ("pyproject.toml", "requirements.txt"):
+        text = (REPO / name).read_text()
+        assert "yasp-agent[gaia]" in text
+        assert "yasp-compile-eval" not in text
+    assert evaluator_check.EVALUATOR == "yasp-eval"

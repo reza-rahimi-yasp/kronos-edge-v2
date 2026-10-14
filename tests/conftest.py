@@ -203,10 +203,11 @@ def toolkit_stub(monkeypatch):
 
 
 class FakeEvaluator:
-    """Stand in for a `yasp-eval register` process: alive until `exit_code` is set, with canned output."""
+    """Stand in for a started Gaia worker container: alive until `exit_code` is set, with canned output."""
 
     def __init__(self, args, code=None, output=""):
         self.args, self.code, self.text = args, code, output
+        self.name = f"kronos-eval-fake{id(self):x}"
 
     def exit_code(self):
         return self.code
