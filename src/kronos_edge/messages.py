@@ -24,10 +24,14 @@ ENV = {
     "match_environment": "No supported environment matches config.yaml.",
     "host_gpu": "The GPU in this machine does not match the requested environment.",
     "image_available": "The Docker image for the requested environment is not built.",
+    "export_image_available": "The Docker image for the kernelgen reference export is not built.",
 }
 
 CONTAINER = {
     "container_run": "The check could not be run in the environment container. Contact support.",
+    "export_run": "The kernelgen reference could not be exported: the export container could not be run. Contact support.",
+    "export_dependencies": "A package listed under dependencies in config.yaml could not be installed in the export container, or would replace a package that image carries. pip's output is below.",
+    "export_reference": "yasp-toolkit kernelgen export could not export model.py as the kernelgen reference. The exporter's output is below.",
 }
 
 EAGER = {
@@ -42,12 +46,6 @@ EAGER = {
     "load_npz": "input.npz could not be read.",
     "validate_inputs": "input.npz does not match the inputs returned by get_inputs().",
     "forward": "Your model cannot be run through eager mode. Either fix it or contact support.",
-}
-
-PT2 = {
-    "pt2_exporter": "The kernelgen exporter is not available inside the environment container. Contact support.",
-    "pt2_capture": "Your model could not be traced by torch.export for the kernelgen reference. Fix the construct named below.",
-    "pt2_save": "The kernelgen reference (model.pt2) could not be written to the artifact directory.",
 }
 
 ONNX = {
@@ -82,21 +80,15 @@ BENCHMARK = {
 
 EVALUATOR = {
     "evaluator_inventory": "The evaluators registered for the kernelgen evaluation could not be listed. The toolkit's output is below.",
-    "evaluator_command": "Docker is not available for starting the Gaia worker: the docker command or /var/run/docker.sock was not found. Install Docker with the NVIDIA container runtime on this machine.",
-    "evaluator_start": "No evaluator for your config's gpu and eval_routing is registered, and the Gaia worker could not be started on this machine or exited before registering. The detail below names the step that failed or shows the worker's output.",
-    "evaluator_ready": "No evaluator for your config's gpu and eval_routing is registered, and the Gaia worker started on this machine did not register in time. Check the gpu it advertises and that the service is reachable.",
-    "evaluator_release": "The Gaia worker container this check started could not be removed. Remove the kronos-eval container named below yourself.",
+    "evaluator_missing": "No Gaia worker advertising your config's gpu is registered under its eval_routing. Deploy one on this machine as README.md describes; the check never starts one.",
 }
 
 KERNELGEN = {
     "kernelgen_reference": "The kernelgen reference (model.pt2) is missing from the artifact directory. Contact support.",
     "kernelgen_engine": "The TensorRT engine (model.engine) kernelgen waits for is missing from the artifact directory. Contact support.",
-    "kernelgen_toolkit": "The yasp-toolkit command is not available. Install yasp-agent[gaia] into the environment that runs the check.",
-    "kernelgen_credentials": "No Yasp API key was found, or the key was not accepted. Export a valid YASP_API_KEY (see .env.example) or store one with `yasp-toolkit keyring set`.",
-    "kernelgen_compile": "The kernelgen optimization did not produce a kernel. The toolkit's output is below.",
-    "kernelgen_eval": "The kernelgen kernel could not be evaluated on this machine. The toolkit's output is below.",
-    "kernelgen_eval_results": "The evaluator's results for the kernelgen kernel could not be read. Contact support.",
-    "kernelgen_eval_incorrect": "The kernelgen kernel failed the evaluation on this machine: it did not build or did not match your model. The evaluator's report is below. Contact support.",
+    "kernelgen_toolkit": "The yasp-toolkit command is not available. Install yasp-agent as README.md describes.",
+    "kernelgen_compile": "The kernelgen optimization did not produce a kernel. The toolkit's output is below; `yasp-toolkit kernelgen get <task id> --wait` shows the job's state.",
+    "kernelgen_inspect": "The kernelgen kernel was written, but its report could not be shown with yasp-toolkit eval inspect. The toolkit's output is below.",
 }
 
-CUSTOMER_MESSAGES = merge(ENV, CONTAINER, EAGER, PT2, ONNX, ONNXSIM, TENSORRT, BENCHMARK, EVALUATOR, KERNELGEN)
+CUSTOMER_MESSAGES = merge(ENV, CONTAINER, EAGER, ONNX, ONNXSIM, TENSORRT, BENCHMARK, EVALUATOR, KERNELGEN)

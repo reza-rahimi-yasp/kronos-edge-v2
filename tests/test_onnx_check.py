@@ -11,7 +11,7 @@ from kronos_edge import container, eager_check, onnx_check
 from kronos_edge.workflow import run_check
 from test_eager_check import CONV_RELU, X, error_records, run, write_model, write_npz
 
-# Runs in eager mode but torch.export cannot trace the data-dependent branch (fails at the pt2 export, see test_pt2_check).
+# Runs in eager mode but torch.export cannot trace the data-dependent branch.
 DATA_DEPENDENT = """
 import torch
 
@@ -59,6 +59,7 @@ def onnx_files(*dirs):
 @pytest.mark.parametrize(
     "source, stage, fragment, cause",
     [
+        pytest.param(DATA_DEPENDENT, "onnx_capture", "could not be traced", "data-dependent", id="data_dependent"),
         pytest.param(UNSUPPORTED_OP, "onnx_convert", "no ONNX translation", "airy_ai", id="unsupported_op"),
     ],
 )

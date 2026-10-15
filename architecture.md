@@ -5,16 +5,20 @@ user's config and environment, then starts the matched environment's Docker
 container with the GPU attached and runs the container graph inside it. The
 container graph writes `report.json` to a directory the host mounted; the host
 merges it into its own state, so `failure` picks the customer message the
-same way for both graphs. Once the container has succeeded, the host makes
-sure an evaluator for the config's GPU and routing key is registered, starting
-a Gaia worker container on this machine when none is, then runs the kernelgen
-steps through the host's `yasp-toolkit` command. The user's Yasp API key stays
-on the host; only a registration key scoped to registering enters the Gaia
-worker, and the model-check container receives neither. A worker the host started is removed on
-every path out of the kernelgen steps. The files the checks produce for the
-user go to the artifact directory, which the host creates and mounts; the
-container's `model.pt2` and `model.engine` in it are what the host's
-`kernelgen` node depends on.
+same way for both graphs. Once the container has succeeded, the host runs the
+documented `yasp-toolkit kernelgen export` in a second container from the
+export image (CPU-only torch and `yasp-agent`, no GPU, no key) to write the
+kernelgen reference, confirms with `yasp-toolkit eval workers` that the user's
+persistent Gaia worker for the config's GPU and routing key is registered, and
+runs `yasp-toolkit kernelgen compile` and `yasp-toolkit eval inspect` on the
+host. Every Yasp interface used is a command documented at
+https://compile.yasp.ai/help/; the repository orchestrates Gaia and implements
+none of it. The user's Yasp API key stays on the host; no container the check
+runs receives a key, and the check never starts, stops, or removes a Gaia
+worker. The files the checks produce for the user go to the artifact
+directory, which the host creates and mounts into both containers; the
+export's `model.pt2` and the container's `model.engine` in it are what the
+host's `kernelgen` node depends on.
 
 ```mermaid
 stateDiagram-v2
@@ -23,15 +27,14 @@ stateDiagram-v2
     load_config --> failure : error
     match_environment --> run_in_container : ok
     match_environment --> failure : error
-    run_in_container --> ensure_evaluator : ok (model.pt2, model.engine)
+    run_in_container --> export_reference : ok (model.engine)
     run_in_container --> failure : error
-    ensure_evaluator --> kernelgen : ok (evaluator registered)
-    ensure_evaluator --> release_evaluator : error
-    kernelgen --> evaluate_kernelgen : ok (kernel.py)
-    kernelgen --> release_evaluator : error
-    evaluate_kernelgen --> release_evaluator
-    release_evaluator --> success : ok
-    release_evaluator --> failure : error
+    export_reference --> verify_evaluator : ok (model.pt2)
+    export_reference --> failure : error
+    verify_evaluator --> kernelgen : ok (worker registered)
+    verify_evaluator --> failure : error
+    kernelgen --> success : ok (kernel.py, report)
+    kernelgen --> failure : error
     success --> [*]
     failure --> [*]
 
@@ -41,10 +44,8 @@ stateDiagram-v2
         load_model --> report : error
         validate_inputs --> run_eager : ok
         validate_inputs --> report : error
-        run_eager --> export_pt2 : ok
+        run_eager --> export_onnx : ok
         run_eager --> report : error
-        export_pt2 --> export_onnx : ok
-        export_pt2 --> report : error
         export_onnx --> simplify_onnx : ok
         export_onnx --> report : error
         simplify_onnx --> build_engine : ok
@@ -57,9 +58,7 @@ stateDiagram-v2
 ```
 
 Every node either advances the state or records a failure stage in
-`error` and `error_detail`; `route_on_error` sends any failure to `failure`,
-except that from `ensure_evaluator` on it sends it through `release_evaluator`
-first, which keeps the error it was given.
+`error` and `error_detail`; `route_on_error` sends any failure to `failure`.
 
 ## Host graph
 
@@ -70,8 +69,9 @@ first, which keeps the error it was given.
   `validate_config`.
 - `match_environment` (`env_check.py`): loads `environments.yaml`, finds the
   entry equal to the config on the five environment fields, and checks the host GPU via
-  `nvidia-smi` and the image via `docker image inspect`. Stages:
-  `load_environments`, `match_environment`, `host_gpu`, `image_available`.
+  `nvidia-smi`, the entry's image and the export image (`kronos-edge:gaia-export`)
+  via `docker image inspect`. Stages: `load_environments`, `match_environment`,
+  `host_gpu`, `image_available`, `export_image_available`.
 - `run_in_container` (`container.py`): creates the artifact directory,
   deletes the managed files listed in `artifacts.py` from a previous run, runs
   the container graph with `docker run --gpus all`, `model.py` and
@@ -80,65 +80,40 @@ first, which keeps the error it was given.
   (`--dependency`) passed on the command line, then validates `report.json` and requires the exit code
   to agree with it. Stage: `container_run`; a
   failure reported by the container is passed through under its own stage.
-- `ensure_evaluator` (`evaluator_check.py`): runs `yasp-toolkit eval workers`
-  filtered by the config's `eval_routing` and looks for a row whose GPU name
-  and routing equal the config's `gpu` and `eval_routing` exactly. If there is
-  none, mints scoped keys with `yasp-toolkit registry key` and `yasp-toolkit
-  eval key` (their output is never logged), reads the worker image's tag
-  list from `docker.yasp.ai` with the registry key and picks the newest
-  release, logs in and pulls under a temporary Docker config, and runs
-  `docker create` for a uniquely named `kronos-eval-*` container with the
-  NVIDIA runtime, the Docker socket, the sibling-task settings of the Gaia
-  Docker guide, and the registration key taken from the create client's
-  environment. The container's command is `yasp-eval register --tag
-  routing=<eval_routing>`, the image's own executable; the GPU name is not
-  overridden. `docker start --attach` runs as a host subprocess whose output,
-  the worker's, is captured to a temporary file. It records the container in
-  `evaluator` and polls the listing until the row appears or a bounded time
-  passes; an attached client that exits meanwhile fails with the output. A
-  failure after `docker create` removes the container by name before the
-  failure propagates. An evaluator that was already registered is not
-  recorded. Stages: `evaluator_inventory`, `evaluator_command`, `evaluator_start`,
-  `evaluator_ready` (plus the toolkit and credentials stages of kernelgen).
+- `export_reference` (`container.py`): runs the export image with
+  `docker run`, `model.py` mounted read-only and the artifact directory
+  writable, no GPU and no environment from the host, so no key. A short `sh`
+  script installs the config's `dependencies` (passed as its arguments) under a
+  constraints file of the image, exiting with a dedicated code if pip fails,
+  then runs `yasp-toolkit kernelgen export --input /work/model.py --output
+  /work/artifact/model.pt2`
+  (https://compile.yasp.ai/help/reference/kernelgen/#export). The exporter
+  builds `Model(*get_init_inputs())`, calls `get_inputs()`, and saves the
+  `torch.export` program; it never sees the benchmarked instance or
+  `input.npz`. The image's torch is CPU-only, so the reference is traced on the
+  CPU. Output is captured (the user's model prints on it) and becomes the
+  detail on failure; the node requires `model.pt2` afterwards. Stages:
+  `export_run`, `export_dependencies`, `export_reference`.
+- `verify_evaluator` (`evaluator_check.py`): runs `yasp-toolkit eval workers
+  --tag routing=<eval_routing>`, bounded, and parses its table for a row whose
+  GPU Name and Routing equal the config's `gpu` and `eval_routing` exactly.
+  The worker is the user's persistent deployment from the Gaia Docker guide
+  with a routing tag; without a match the check stops before any job is
+  submitted. Nothing is started, stopped, or minted. Stages:
+  `evaluator_inventory`, `evaluator_missing` (plus `kernelgen_toolkit`).
 - `kernelgen` (`kernelgen_check.py`): requires `model.pt2` and `model.engine`
-  in the artifact directory (the TensorRT output it waits for), then runs
-  `yasp-toolkit kernelgen compile` as a subprocess with the reference, the
-  user's `model.py` as source, the config's `gpu` as target, and the config's
-  `eval_routing` for the in-compile evaluations; the command polls the job
-  until it is terminal. Requires `kernel.py` to exist afterwards (the toolkit
-  exits 0 after some early errors) and records its path in `kernel_path`.
-  Stages: `kernelgen_reference`, `kernelgen_engine`, `kernelgen_toolkit`,
-  `kernelgen_credentials`, `kernelgen_compile`.
-- `evaluate_kernelgen` (`kernelgen_check.py`): runs `yasp-toolkit eval compare`
-  on `kernel_path` against `model.pt2` for the config's `gpu`, routed to the
-  evaluator registered from this machine by `eval_routing`; writes the
-  evaluator's results as `kernelgen_eval.json`, requires its correctness
-  checks to pass, and records the result and the speedup in
-  `kernelgen_result` and `kernelgen_speedup`. Stages: `kernelgen_eval`,
-  `kernelgen_eval_results`, `kernelgen_eval_incorrect` (plus the toolkit and
-  credentials stages above).
-- `release_evaluator` (`evaluator_check.py`): stops the container named in
-  `evaluator`, if any, with `docker stop` bounded by a grace period, so the
-  worker cancels its running task (run by the launcher's default backend as
-  a subprocess inside the worker, or, when its Docker backend is configured,
-  in a sibling container named `yasp-launcher-slot`, shared by every worker
-  on the machine, which the cancel tears down), then removes it with
-  `docker rm --force` (one already gone counts as removed), reaps the
-  attached client, killing it if it does not exit, and clears the key. With
-  the worker gone it inspects the slot, reading its id and environment in
-  one answer: the worker was created with `KRONOS_EVALUATOR=<container
-  name>` in `YASP_LAUNCH_DOCKER_FORWARD_ENV`, so a slot whose environment
-  carries that marker for this worker is its leftover and is removed by
-  that id, never by the name, which another worker's task may have taken
-  since (one gone by then counts as removed); a slot without the marker is
-  another worker's task and is left alone. Reached from every outcome of `ensure_evaluator`,
-  `kernelgen`, and `evaluate_kernelgen`, so a worker the host started never
-  outlives the check and one it did not start is never touched. A failure to remove is the
-  stage `evaluator_release` only when no earlier failure is in state;
-  otherwise it is logged and the earlier failure is kept.
+  in the artifact directory, then runs `yasp-toolkit kernelgen compile` with the
+  reference alone (no `--source`), the config's `gpu` as target, and the
+  config's `eval_routing` for the in-compile evaluations; the command polls the
+  job until it is terminal. Requires `kernel.py` and `kernelgen_report.json`
+  afterwards (the toolkit can exit 0 after an early error), then runs
+  `yasp-toolkit eval inspect --file kernelgen_report.json` and keeps its
+  rendering in `kernelgen_report` for the success message. No field of the
+  report is read. Stages: `kernelgen_reference`, `kernelgen_engine`,
+  `kernelgen_toolkit`, `kernelgen_compile`, `kernelgen_inspect`.
 - `success` / `failure` (`workflow.py`): set `outcome` and the
-  `customer_message`: the benchmark numbers and the kernelgen speedup on
-  success, or the message looked up by stage in `messages.py`.
+  `customer_message`: the benchmark numbers and the inspected kernelgen report
+  on success, or the message looked up by stage in `messages.py`.
 
 ## Container graph
 
@@ -159,22 +134,6 @@ Run by `python -m kronos_edge.eager_check` with `--device cuda` and the
   `load_npz`, `validate_inputs`.
 - `run_eager` (`eager_check.py`): one forward pass under `torch.no_grad()`
   on copies of the inputs. Stage: `forward`.
-- `export_pt2` (`pt2_check.py`): yasp's exporter
-  (`yasp.compile.common.exporter.export`, the function `yasp-toolkit kernelgen
-  export` runs: inference mode, Core ATen decompositions) on independent CPU
-  copies of the model and inputs in state, saved with the exporter's `save`;
-  the package is imported in the node, so an image without it is the
-  `pt2_exporter` stage;
-  the model is not cast, and the eager model and inputs in state are neither
-  moved nor written to. The archive records the trace device; a GPU-traced
-  reference failed on the kernelgen service with the error a torch built
-  without CUDA raises when loading it, and CPU-traced references were
-  accepted, so the copies remove that loading failure (the service's build is
-  inferred from that behaviour, not observed). Keeps the
-  `ExportedProgram` in state and writes `model.pt2`.
-  Runs first after the eager pass so the host's kernelgen reference exists
-  before the ONNX chain starts. Stages: `pt2_exporter`, `pt2_capture`,
-  `pt2_save`.
 - `export_onnx` (`onnx_check.py`): casts a copy of the model and its float
   inputs to the configured precision unless they already have it, leaving
   the eager model in state untouched; then

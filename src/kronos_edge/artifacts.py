@@ -13,13 +13,12 @@ EXPORTED_FILE = "model.onnx"
 SIMPLIFIED_FILE = "model_simplified.onnx"
 ENGINE_FILE = "model.engine"
 BENCHMARK_FILE = "benchmark.json"
-PT2_FILE = "model.pt2"  # the torch.export reference kernelgen optimizes
+PT2_FILE = "model.pt2"  # the reference `yasp-toolkit kernelgen export` writes in the export container
 KERNEL_FILE = "kernel.py"  # the optimized kernel kernelgen returns
-KERNELGEN_REPORT_FILE = "kernelgen_report.json"
-KERNELGEN_EVAL_FILE = "kernelgen_eval.json"  # the evaluator's results for the kernel
+KERNELGEN_REPORT_FILE = "kernelgen_report.json"  # the kernelgen job's report
 MANAGED_FILES = (
     EXPORTED_FILE, SIMPLIFIED_FILE, ENGINE_FILE, BENCHMARK_FILE,
-    PT2_FILE, KERNEL_FILE, KERNELGEN_REPORT_FILE, KERNELGEN_EVAL_FILE,
+    PT2_FILE, KERNEL_FILE, KERNELGEN_REPORT_FILE,
 )
 
 # Weights above the protobuf limit go to a companion file with this suffix.

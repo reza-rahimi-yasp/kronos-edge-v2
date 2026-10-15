@@ -1,4 +1,4 @@
-"""The container graph: eager run, pt2 reference export, ONNX export and simplification, TensorRT engine build, benchmark.
+"""The container graph: eager run, ONNX export and simplification, TensorRT engine build, benchmark.
 
 model.py must define ``Model`` (a torch.nn.Module subclass) and
 ``get_inputs()`` or ``get_fwd_args()`` returning the reference inputs.
@@ -24,7 +24,7 @@ import numpy as np
 import torch
 from langgraph.graph import END, START, StateGraph
 
-from kronos_edge import benchmark_check, onnx_check, onnxsim_check, pt2_check, tensorrt_check
+from kronos_edge import benchmark_check, onnx_check, onnxsim_check, tensorrt_check
 from kronos_edge.config import PRECISIONS
 from kronos_edge.log import PACKAGE_LOGGER, configure, get_logger
 from kronos_edge.messages import EAGER as CUSTOMER_MESSAGES
@@ -185,7 +185,6 @@ def build_graph():
     graph.add_node("load_model", load_model)
     graph.add_node("validate_inputs", validate_inputs)
     graph.add_node("run_eager", run_eager)
-    graph.add_node("export_pt2", pt2_check.export_pt2)
     graph.add_node("export_onnx", onnx_check.export_onnx)
     graph.add_node("simplify_onnx", onnxsim_check.simplify_onnx)
     graph.add_node("build_engine", tensorrt_check.build_engine)
@@ -193,8 +192,7 @@ def build_graph():
     graph.add_edge(START, "load_model")
     graph.add_conditional_edges("load_model", route_on_error, {"ok": "validate_inputs", "failure": END})
     graph.add_conditional_edges("validate_inputs", route_on_error, {"ok": "run_eager", "failure": END})
-    graph.add_conditional_edges("run_eager", route_on_error, {"ok": "export_pt2", "failure": END})
-    graph.add_conditional_edges("export_pt2", route_on_error, {"ok": "export_onnx", "failure": END})
+    graph.add_conditional_edges("run_eager", route_on_error, {"ok": "export_onnx", "failure": END})
     graph.add_conditional_edges("export_onnx", route_on_error, {"ok": "simplify_onnx", "failure": END})
     graph.add_conditional_edges("simplify_onnx", route_on_error, {"ok": "build_engine", "failure": END})
     graph.add_conditional_edges("build_engine", route_on_error, {"ok": "benchmark", "failure": END})

@@ -22,15 +22,12 @@ class State(TypedDict, total=False):
     model: Any
     get_inputs: Callable[[], object]
     user_inputs: tuple[Any, ...]
-    exported_program: Any
     onnx_model: Any
     simplified_onnx: Any
     engine: bytes
     benchmark: dict[str, Any]
-    evaluator: Any  # the Gaia worker container ensure_evaluator started, for release_evaluator; None when it started none
     kernel_path: str
-    kernelgen_result: dict
-    kernelgen_speedup: float
+    kernelgen_report: str  # the kernelgen report as `yasp-toolkit eval inspect` renders it
     device: str
     log_level: str
     error: str | None

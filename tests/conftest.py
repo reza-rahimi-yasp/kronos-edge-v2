@@ -1,8 +1,6 @@
 import json
 import logging
 import subprocess
-import sys
-import types
 from pathlib import Path
 
 import numpy as np
@@ -11,7 +9,7 @@ import yaml
 
 import torch
 
-from kronos_edge import benchmark_check, container, eager_check, env_check, evaluator_check, kernelgen_check, tensorrt_check
+from kronos_edge import benchmark_check, container, eager_check, env_check, kernelgen_check, tensorrt_check
 
 ENVIRONMENT = {
     "gpu": "NVIDIA GeForce RTX 5090",
@@ -80,51 +78,6 @@ def host_matches_registry(monkeypatch):
     monkeypatch.setattr(env_check, "host_gpu", lambda: (ENVIRONMENT["gpu"], ENVIRONMENT["driver"]))
 
 
-def _exporter_stand_in():
-    """What `yasp.compile.common.exporter` does, for a venv without the package: inference-mode torch.export, Core ATen."""
-    module = types.ModuleType("yasp.compile.common.exporter")
-
-    def export(model, args, kwargs=None, *, dynamic_shapes=None):
-        was_training = model.training
-        model.eval()
-        try:
-            with torch.no_grad():
-                exported = torch.export.export(model, args, kwargs, dynamic_shapes=dynamic_shapes)
-        finally:
-            model.train(was_training)
-        return exported.run_decompositions()
-
-    def save(exported, path):
-        torch.export.save(exported, str(path))
-
-    module.export, module.save, module.stand_in = export, save, True
-    return module
-
-
-def ensure_exporter():
-    """The exporter module the pt2 node delegates to: yasp's own when the venv has it, else the stand-in registered
-    under its import path. Also run inside the subprocess tests, which see no fixture."""
-    try:
-        from yasp.compile.common import exporter
-    except ImportError:
-        exporter = _exporter_stand_in()
-        for name in ("yasp", "yasp.compile", "yasp.compile.common"):
-            package = sys.modules.get(name) or types.ModuleType(name)
-            package.__path__ = []
-            sys.modules[name] = package
-        sys.modules["yasp.compile.common"].exporter = exporter
-        sys.modules["yasp.compile.common.exporter"] = exporter
-    return exporter
-
-
-@pytest.fixture(autouse=True)
-def official_exporter():
-    """yasp's exporter when the venv has it (`yasp-compile-common`, from `requirements.txt`), else a stand-in with
-    its API, so the suite stays runnable there; `stand_in` tells which one ran. The real library is validated by
-    the GPU run of the image."""
-    return ensure_exporter()
-
-
 @pytest.fixture(autouse=True)
 def eager_check_runs_in_process(monkeypatch):
     """Stand in for `docker run`: run the eager sub-graph here, on CPU, write its report, return its exit code."""
@@ -187,22 +140,17 @@ def engine_runner_stub(monkeypatch):
     monkeypatch.setattr(benchmark_check, "load_engine", FakeEngineRunner)
 
 
-# One evaluator result, the shape of an entry of `eval compare`'s results.json (and of a kernelgen
-# report's `eval_result`): correctness flags plus the measured speedup.
-PASSING_RESULT = {
-    "stage": "benchmark",
-    "correctness_checks": {
-        "all_checks_passed": True, "all_shapes_match": True, "all_dtypes_match": True,
-        "all_output_values_match": True, "results": [{"all_checks_passed": True}],
-    },
-    "reference_benchmark": {"runtimes_ms": [2.0, 2.1], "median_runtime_ms": 2.05},
-    "candidate_benchmark": {"runtimes_ms": [1.0, 1.05], "median_runtime_ms": 1.025},
-    "speedup": 2.0,
-}
-
 FAKE_KERNEL = "import torch\n\n\nclass Model(torch.nn.Module):\n    def forward(self, x):\n        return x\n"
 
+# The report is passed to `eval inspect` and shown; the check never reads its fields.
+FAKE_REPORT = json.dumps({"optimized": True})
+
+# What `eval inspect --file <report>` prints for it: the report rendered for a reader.
+FAKE_INSPECT = "kernelgen_report.json\n  optimized: True\n  speedup: 2.000\n  correctness: passed\n"
+
 FAKE_TASK_LINE = "  task 00000000-0000-0000-0000-000000000000 (completed)\n"
+
+FAKE_REFERENCE = b"reference written by yasp-toolkit kernelgen export"
 
 
 def evaluator_listing(*rows):
@@ -220,11 +168,11 @@ def evaluator_listing(*rows):
     return "\n".join(lines) + "\n"
 
 
-def fake_toolkit(args, result=PASSING_RESULT, timeout=None):
-    """What a successful yasp-toolkit run leaves behind: the kernel and report, or the results.json.
+def fake_toolkit(args, timeout=None):
+    """What a successful yasp-toolkit run leaves behind: the kernel and its report, the rendered report, or a listing.
 
     `eval workers` lists an evaluator advertising the config's GPU under the routing key asked for,
-    so by default a run finds its evaluator registered and starts none.
+    so by default a run finds the persistent worker it needs registered.
     """
 
     def option(name):
@@ -233,9 +181,10 @@ def fake_toolkit(args, result=PASSING_RESULT, timeout=None):
     stdout = FAKE_TASK_LINE
     if args[:2] == ["kernelgen", "compile"]:
         option("--output").write_text(FAKE_KERNEL)
-        option("--report").write_text(json.dumps({"gpu_name": args[args.index("--gpu-name") + 1], "eval_result": result}))
-    elif args[:2] == ["eval", "compare"]:
-        option("--output").write_text(json.dumps({"opt_1": result}))
+        option("--report").write_text(FAKE_REPORT)
+    elif args[:2] == ["eval", "inspect"]:
+        assert option("--file").is_file(), "inspect is asked for a report that is not there"
+        stdout = FAKE_INSPECT
     elif args[:2] == ["eval", "workers"]:
         stdout = evaluator_listing((CONFIG["gpu"], str(option("--tag")).removeprefix("routing=")))
     else:
@@ -249,44 +198,16 @@ def toolkit_stub(monkeypatch):
     monkeypatch.setattr(kernelgen_check, "run_toolkit", fake_toolkit)
 
 
-class FakeEvaluator:
-    """Stand in for a started Gaia worker container: alive until `exit_code` is set, with canned output."""
-
-    def __init__(self, args, code=None, output=""):
-        self.args, self.code, self.text = args, code, output
-        self.name = f"kronos-eval-fake{id(self):x}"
-
-    def exit_code(self):
-        return self.code
-
-    def output(self):
-        return self.text
-
-
-class EvaluatorRecorder:
-    """The evaluators the check started and stopped; `exits` is the (code, output) a started one reports."""
-
-    def __init__(self):
-        self.started, self.stopped, self.exits = [], [], None
-
-    def start(self, args):
-        evaluator = FakeEvaluator(args, *(self.exits or ()))
-        self.started.append(evaluator)
-        return evaluator
-
-    def stop(self, evaluator):
-        self.stopped.append(evaluator)
+def fake_export(model_path, artifacts_dir, dependencies):
+    """What the export container leaves behind: the reference `yasp-toolkit kernelgen export` wrote, and its output."""
+    (Path(artifacts_dir) / "model.pt2").write_bytes(FAKE_REFERENCE)
+    return subprocess.CompletedProcess(["docker", "run"], 0, stdout="  wrote      /work/artifact/model.pt2\n", stderr="")
 
 
 @pytest.fixture(autouse=True)
-def evaluators(monkeypatch):
-    """Tests never start a real evaluator: record what the check would start and stop, and poll without sleeping."""
-    recorder = EvaluatorRecorder()
-    monkeypatch.setattr(evaluator_check, "start_evaluator", recorder.start)
-    monkeypatch.setattr(evaluator_check, "stop_evaluator", recorder.stop)
-    monkeypatch.setattr(evaluator_check, "POLL_INTERVAL_S", 0)
-    monkeypatch.setattr(evaluator_check, "READY_TIMEOUT_S", 1)
-    return recorder
+def export_stub(monkeypatch):
+    """Stand in for the export container (`docker run` of the export image): tests never shell out."""
+    monkeypatch.setattr(container, "run_export", fake_export)
 
 
 @pytest.fixture

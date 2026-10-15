@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from kronos_edge import benchmark_check, container, eager_check, env_check, evaluator_check, kernelgen_check, messages, onnx_check, onnxsim_check, pt2_check, tensorrt_check, workflow
+from kronos_edge import benchmark_check, container, eager_check, env_check, evaluator_check, kernelgen_check, messages, onnx_check, onnxsim_check, tensorrt_check, workflow
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 
@@ -31,7 +31,7 @@ def test_merge_rejects_duplicate_stage_names():
 
 
 def test_merged_table_is_the_union_of_every_check():
-    tables = (env_check.CUSTOMER_MESSAGES, container.CUSTOMER_MESSAGES, eager_check.CUSTOMER_MESSAGES, pt2_check.CUSTOMER_MESSAGES, onnx_check.CUSTOMER_MESSAGES, onnxsim_check.CUSTOMER_MESSAGES, tensorrt_check.CUSTOMER_MESSAGES, benchmark_check.CUSTOMER_MESSAGES, evaluator_check.CUSTOMER_MESSAGES, kernelgen_check.CUSTOMER_MESSAGES)
+    tables = (env_check.CUSTOMER_MESSAGES, container.CUSTOMER_MESSAGES, eager_check.CUSTOMER_MESSAGES, onnx_check.CUSTOMER_MESSAGES, onnxsim_check.CUSTOMER_MESSAGES, tensorrt_check.CUSTOMER_MESSAGES, benchmark_check.CUSTOMER_MESSAGES, evaluator_check.CUSTOMER_MESSAGES, kernelgen_check.CUSTOMER_MESSAGES)
 
     assert workflow.CUSTOMER_MESSAGES == {k: v for t in tables for k, v in t.items()}
     assert len(workflow.CUSTOMER_MESSAGES) == sum(len(t) for t in tables)
