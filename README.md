@@ -372,7 +372,8 @@ The files the checks produce are written to `.artifact` in the current
 directory. Pass `--artifacts path/to/dir` to use another directory. It is
 created if missing and mounted into both containers, so the files they write
 are owned by the containers' user. Each run first deletes the files listed below from a
-previous run and nothing else, so your own files in that directory are safe.
+previous run, and `kernelgen_eval.json`, which earlier versions of the check wrote,
+and nothing else, so your own files in that directory are safe.
 On a failure, the files produced before it are kept.
 
 | File | Written by |

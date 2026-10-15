@@ -130,7 +130,9 @@ decisions: do not add file listings, commands, or summaries here.
   `--artifacts` says otherwise, created by the host and mounted into the
   container. Every such file is listed in `artifacts.py`; the host deletes
   those names, and only those, before each run so a stale file never sits
-  next to a fresh one. Each node writes its own file as soon as it has it, so
+  next to a fresh one. A name an earlier version wrote stays listed there as
+  retired, deleted but never written, so a carried-over directory is cleaned
+  too. Each node writes its own file as soon as it has it, so
   a later failure keeps the earlier files. Intermediate models also stay in
   state in memory for the next node.
 - Model-stack packages (`onnx`, `onnxsim`, and the exporter's lazy imports)

@@ -24,3 +24,19 @@ def test_clear_removes_managed_files_and_companions_only(tmp_path):
 
 def test_clear_tolerates_a_missing_directory(tmp_path):
     artifacts.clear(tmp_path / "absent")
+
+
+def test_clear_removes_the_retired_evaluation_report_of_an_older_version(tmp_path):
+    """Earlier versions wrote kernelgen_eval.json; an upgraded artifact directory must not keep it next to fresh files."""
+    for name in (*artifacts.MANAGED_FILES, "kernelgen_eval.json"):
+        (tmp_path / name).write_bytes(b"x")
+    (tmp_path / "notes.txt").write_bytes(b"mine")
+
+    artifacts.clear(tmp_path)
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["notes.txt"]
+
+
+def test_retired_files_are_cleared_but_never_produced():
+    assert "kernelgen_eval.json" in artifacts.RETIRED_FILES
+    assert not set(artifacts.RETIRED_FILES) & set(artifacts.MANAGED_FILES)

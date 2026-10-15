@@ -119,6 +119,21 @@ def test_rerun_clears_managed_files_but_keeps_the_users_own(monkeypatch, tmp_pat
     assert sorted(f.name for f in art.iterdir()) == ["model.onnx", "notes.txt"]
 
 
+def test_a_run_in_an_artifact_directory_from_an_older_version_clears_its_evaluation_report(monkeypatch, tmp_path, env_files, good_model):
+    """The retired kernelgen_eval.json of an earlier run must not sit next to this run's files, even when this run fails."""
+    config, environments = env_files
+    art = tmp_path / ".artifact"
+    art.mkdir()
+    (art / "kernelgen_eval.json").write_text('{"opt_1": {"speedup": 2.0}}')
+    (art / "notes.txt").write_text("mine")
+    fake_container(monkeypatch, None, 1)
+
+    state = run_check(config, *good_model, environments_path=environments, artifacts_path=art)
+
+    assert state["error"] == "container_run"
+    assert sorted(f.name for f in art.iterdir()) == ["notes.txt"]
+
+
 def test_managed_files_are_cleared_even_if_the_container_fails_to_start(monkeypatch, tmp_path, env_files, good_model):
     config, environments = env_files
     art = tmp_path / ".artifact"
