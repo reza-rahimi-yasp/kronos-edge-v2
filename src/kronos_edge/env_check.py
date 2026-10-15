@@ -2,12 +2,14 @@
 
 The config names the GPU, driver, CUDA, TensorRT, and torch versions the user
 wants. It must match one registry entry exactly, that entry must describe the
-GPU in this machine, and the entry's Docker image must be built.
+GPU in this machine, and the entry's Docker image and the export image must
+be built.
 """
 
 import subprocess
 
 from kronos_edge.config import CONFIG_FIELDS, EnvironmentConfig, load_environments, parse_config, read_yaml
+from kronos_edge.container import EXPORT_DOCKERFILE, EXPORT_IMAGE
 from kronos_edge.log import get_logger
 from kronos_edge.messages import ENV as CUSTOMER_MESSAGES
 from kronos_edge.state import State, fail
@@ -75,6 +77,14 @@ def match_environment(state: State) -> State:
             raise ValueError(
                 f"image {environment.image} not found; build it with: "
                 f"docker build -f {environment.dockerfile} -t {environment.image} ."
+            )
+
+        stage = "export_image_available"
+        if not image_exists(EXPORT_IMAGE):
+            raise ValueError(
+                f"image {EXPORT_IMAGE} not found; build it with the registry-key secret README.md describes "
+                f'under "Build the images": docker build --secret id=yasp-netrc,src=<netrc file> '
+                f"-f {EXPORT_DOCKERFILE} -t {EXPORT_IMAGE} ."
             )
     except Exception as exc:
         return fail(logger, stage, exc)

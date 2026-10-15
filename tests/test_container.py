@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from conftest import CONFIG, GOOD_MODEL, write_yaml
+from conftest import CONFIG, GOOD_MODEL, fake_export, write_yaml
 from kronos_edge import artifacts, container, eager_check, onnxsim_check
 
 BENCHMARK = {
@@ -102,7 +102,7 @@ def test_rerun_clears_managed_files_but_keeps_the_users_own(monkeypatch, tmp_pat
     first = run_check(config, model, npz, environments_path=environments, artifacts_path=art)
     assert first["outcome"] == "success"
     assert sorted(f.name for f in art.iterdir()) == [
-        "benchmark.json", "kernel.py", "kernelgen_eval.json", "kernelgen_report.json",
+        "benchmark.json", "kernel.py", "kernelgen_report.json",
         "model.engine", "model.onnx", "model.pt2", "model_simplified.onnx",
     ]
     (art / "notes.txt").write_text("mine")
@@ -116,7 +116,22 @@ def test_rerun_clears_managed_files_but_keeps_the_users_own(monkeypatch, tmp_pat
     second = run_check(config, model, npz, environments_path=environments, artifacts_path=art)
 
     assert second["error"] == "onnx_simplify"
-    assert sorted(f.name for f in art.iterdir()) == ["model.onnx", "model.pt2", "notes.txt"]
+    assert sorted(f.name for f in art.iterdir()) == ["model.onnx", "notes.txt"]
+
+
+def test_a_run_in_an_artifact_directory_from_an_older_version_clears_its_evaluation_report(monkeypatch, tmp_path, env_files, good_model):
+    """The retired kernelgen_eval.json of an earlier run must not sit next to this run's files, even when this run fails."""
+    config, environments = env_files
+    art = tmp_path / ".artifact"
+    art.mkdir()
+    (art / "kernelgen_eval.json").write_text('{"opt_1": {"speedup": 2.0}}')
+    (art / "notes.txt").write_text("mine")
+    fake_container(monkeypatch, None, 1)
+
+    state = run_check(config, *good_model, environments_path=environments, artifacts_path=art)
+
+    assert state["error"] == "container_run"
+    assert sorted(f.name for f in art.iterdir()) == ["notes.txt"]
 
 
 def test_managed_files_are_cleared_even_if_the_container_fails_to_start(monkeypatch, tmp_path, env_files, good_model):
@@ -166,7 +181,7 @@ def test_artifact_directory_is_created_before_the_container_runs(monkeypatch, tm
 
     def fake(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level, dependencies):
         seen["exists"] = Path(artifacts_dir).is_dir()
-        for name in ("model.pt2", "model.engine"):  # what the kernelgen step waits for
+        for name in ("model.engine",):  # what the kernelgen step waits for besides the export's reference
             (Path(artifacts_dir) / name).write_bytes(b"x")
         (Path(report_dir) / container.REPORT_FILE).write_text(json.dumps({"error": None, "benchmark": BENCHMARK}))
         return 0
@@ -314,7 +329,7 @@ def test_user_prints_do_not_corrupt_the_report(tmp_path, good_model, artifacts):
     assert (report["error"], report["error_detail"]) == (None, "")
     assert container.Report.model_validate(report).benchmark is not None
     assert "[torch.onnx]" not in result.stdout
-    assert sorted(f.name for f in artifacts.iterdir()) == ["benchmark.json", "model.engine", "model.onnx", "model.pt2", "model_simplified.onnx"]
+    assert sorted(f.name for f in artifacts.iterdir()) == ["benchmark.json", "model.engine", "model.onnx", "model_simplified.onnx"]
 
 
 def test_cuda_unavailable_is_its_own_stage(monkeypatch, good_model, artifacts):
@@ -324,3 +339,106 @@ def test_cuda_unavailable_is_its_own_stage(monkeypatch, good_model, artifacts):
 
     assert state["error"] == "select_device"
     assert "cuda" in state["error_detail"]
+
+
+# ---------- The export container: the documented `yasp-toolkit kernelgen export` on model.py, on the CPU, without a key.
+
+
+def test_export_command_runs_the_documented_exporter_without_gpu_or_credentials(tmp_path):
+    model, art = tmp_path / "m.py", tmp_path / ".artifact"
+
+    cmd = container.build_export_command(model, art, ["timm", "einops==0.8.0"])
+
+    assert cmd[:3] == ["docker", "run", "--rm"]
+    assert f"{model.resolve()}:/work/model.py:ro" in cmd
+    assert f"{art.resolve()}:/work/artifact" in cmd
+    assert container.EXPORT_IMAGE in cmd
+    assert "--gpus" not in cmd
+    assert not any(part in ("-e", "--env", "--env-file") or "YASP" in part for part in cmd)  # no credential enters
+    script = cmd[cmd.index("-c") + 1]
+    assert "yasp-toolkit kernelgen export --input /work/model.py --output /work/artifact/model.pt2" in script
+    # The requirements reach the script as arguments, never spliced into its text.
+    assert cmd[cmd.index("-c") + 2:] == ["kronos-export", "timm", "einops==0.8.0"]
+    assert "timm" not in script and "einops" not in script
+
+
+def test_export_without_dependencies_passes_none(tmp_path):
+    cmd = container.build_export_command(tmp_path / "m.py", tmp_path / ".artifact", [])
+
+    assert cmd[-1] == "kronos-export"
+
+
+def test_export_runs_after_the_container_on_the_users_model_with_the_config_dependencies(monkeypatch, tmp_path, env_files, good_model):
+    seen = []
+
+    def recording(model_path, artifacts_dir, dependencies):
+        seen.append((str(model_path), sorted(f.name for f in Path(artifacts_dir).iterdir()), list(dependencies)))
+        return fake_export(model_path, artifacts_dir, dependencies)
+
+    monkeypatch.setattr(container, "run_export", recording)
+    _, environments = env_files
+    config = write_yaml(tmp_path / "deps.yaml", {**CONFIG, "dependencies": ["einops==0.8.0"]})
+
+    state = run_check(config, *good_model, environments_path=environments)
+
+    assert state["outcome"] == "success"
+    ((model_path, present, dependencies),) = seen
+    assert model_path == str(good_model[0])
+    assert {"model.engine", "benchmark.json"} <= set(present)  # the model-check container ran first
+    assert "model.pt2" not in present
+    assert dependencies == ["einops==0.8.0"]
+
+
+def exporting(code, output, writes=False):
+    def run_export(model_path, artifacts_dir, dependencies):
+        if writes:
+            (Path(artifacts_dir) / "model.pt2").write_bytes(b"x")
+        return subprocess.CompletedProcess(["docker", "run"], code, stdout=output, stderr="")
+
+    return run_export
+
+
+@pytest.mark.parametrize(
+    "run_export, stage, fragment",
+    [
+        pytest.param(
+            lambda *args: (_ for _ in ()).throw(FileNotFoundError(2, "No such file or directory", "docker")),
+            "export_run", "docker", id="docker_missing",
+        ),
+        pytest.param(
+            exporting(container.DEPENDENCIES_FAILED, "ERROR: No matching distribution found for nosuchpkg\n"),
+            "export_dependencies", "nosuchpkg", id="dependency_not_installable",
+        ),
+        pytest.param(
+            exporting(1, "torch._dynamo.exc.UserError: data-dependent branch\n"),
+            "export_reference", "data-dependent", id="export_failed",
+        ),
+        pytest.param(exporting(0, "  wrote      nothing\n"), "export_reference", "model.pt2", id="exit_zero_without_a_reference"),
+    ],
+)
+def test_export_failures_are_stages_and_stop_before_any_toolkit_call(monkeypatch, caplog, env_files, good_model, capsys, run_export, stage, fragment):
+    from kronos_edge import kernelgen_check
+
+    calls = []
+    monkeypatch.setattr(container, "run_export", run_export)
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", lambda args, timeout=None: calls.append(args))
+
+    state = run(env_files, good_model)
+
+    assert state["outcome"] == "failure"
+    assert state["error"] == stage
+    assert fragment in state["customer_message"]
+    assert [r.stage for r in error_records(caplog)] == [stage]
+    assert calls == []
+    assert capsys.readouterr().out == ""  # the export's output, the user's prints included, never reaches stdout
+
+
+def test_export_is_skipped_when_the_container_fails(monkeypatch, env_files, good_model):
+    exports = []
+    monkeypatch.setattr(container, "run_export", lambda *args: exports.append(args))
+    fake_container(monkeypatch, json.dumps({"error": "forward", "error_detail": "boom", "benchmark": None}), 1)
+
+    state = run(env_files, good_model)
+
+    assert state["error"] == "forward"
+    assert exports == []

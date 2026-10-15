@@ -3,7 +3,7 @@ import logging
 import pytest
 
 from conftest import CONFIG, ENVIRONMENT, REGISTRY, write_yaml
-from kronos_edge import env_check
+from kronos_edge import container, env_check
 from kronos_edge.workflow import main, run_check
 
 
@@ -150,7 +150,24 @@ def test_missing_image_is_reported_with_build_command(monkeypatch, caplog, env_f
     assert state["error"] == "image_available"
     assert "docker build" in state["customer_message"]
     assert REGISTRY["environments"][0]["image"] in state["customer_message"]
+    # The model-check image carries no yasp package, so its build needs no registry key.
+    assert "--secret" not in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == ["image_available"]
+
+
+def test_missing_export_image_is_reported_with_its_build_command(monkeypatch, caplog, env_files, good_model):
+    """The export image installs yasp-agent from the yasp index, so its build command names the registry-key secret."""
+    config, environments = env_files
+    monkeypatch.setattr(env_check, "image_exists", lambda image: image != container.EXPORT_IMAGE)
+
+    state = run(config, environments, good_model)
+
+    assert state["outcome"] == "failure"
+    assert state["error"] == "export_image_available"
+    assert container.EXPORT_IMAGE in state["customer_message"]
+    assert f"docker build --secret id=yasp-netrc,src=<netrc file> -f {container.EXPORT_DOCKERFILE}" in state["customer_message"]
+    assert "README.md" in state["customer_message"]
+    assert [r.stage for r in error_records(caplog)] == ["export_image_available"]
 
 
 def test_main_accepts_environments_override(env_files, good_model, capsys):

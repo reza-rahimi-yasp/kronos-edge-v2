@@ -90,7 +90,7 @@ def test_failure_stages(tmp_path, caplog, monkeypatch, env_files, build, stage, 
     assert state["error"] == stage
     assert fragment in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == [stage]
-    assert sorted(f.name for f in (tmp_path / ".artifact").iterdir()) == ["model.onnx", "model.pt2", "model_simplified.onnx"]  # no engine, no benchmark
+    assert sorted(f.name for f in (tmp_path / ".artifact").iterdir()) == ["model.onnx", "model_simplified.onnx"]  # no engine, no benchmark
 
 
 def test_missing_tensorrt_is_a_support_failure(monkeypatch, caplog, good_model, artifacts, tensorrt_stub):

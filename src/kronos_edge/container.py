@@ -1,8 +1,18 @@
-"""Run the eager check inside the matched environment's container, on the GPU.
+"""Run the eager check inside the matched environment's container, on the GPU, then export the kernelgen reference.
 
 The container writes its report to a file in a directory the host mounts, so
 nothing the user's model prints on stdout can touch the protocol. The files
 the checks produce for the user go to the mounted artifact directory.
+
+The kernelgen reference is produced by the documented ``yasp-toolkit kernelgen
+export`` (https://compile.yasp.ai/help/reference/kernelgen/#export), run in a
+second container from the export image: CPU-only torch and yasp-agent, no
+GPU, no key. It reads model.py the way the exporter documents (``Model``,
+``get_inputs``, ``get_init_inputs``), not the benchmarked instance or
+input.npz. The config's dependencies are installed there first, under a
+constraints file of the image, since the exporter imports model.py. Its
+output is captured: the user's model prints on it, and stdout carries the
+check's result.
 """
 
 import subprocess
@@ -14,13 +24,28 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from kronos_edge import artifacts as artifact_files
 from kronos_edge.log import get_logger
-from kronos_edge.messages import BENCHMARK, CONTAINER as CUSTOMER_MESSAGES, EAGER, ONNX, ONNXSIM, PT2, TENSORRT
+from kronos_edge.artifacts import PT2_FILE
+from kronos_edge.messages import BENCHMARK, CONTAINER as CUSTOMER_MESSAGES, EAGER, ONNX, ONNXSIM, TENSORRT
 from kronos_edge.state import State, fail
 
 logger = get_logger(__name__)
 
 DEVICE = "cuda"
 REPORT_FILE = "report.json"
+
+EXPORT_IMAGE = "kronos-edge:gaia-export"
+EXPORT_DOCKERFILE = "docker/gaia-export/Dockerfile"
+# The exit code the export script uses when the config's dependencies could not be installed.
+DEPENDENCIES_FAILED = 90
+# Runs in the export image: the config's dependencies (its arguments) under a constraints file of the image, then the
+# documented export. The requirements arrive as arguments, never in the script's text.
+EXPORT_SCRIPT = (
+    'if [ "$#" -gt 0 ]; then '
+    "pip freeze > /tmp/constraints.txt && pip install --no-cache-dir --constraint /tmp/constraints.txt \"$@\" "
+    f"|| exit {DEPENDENCIES_FAILED}; "
+    "fi; "
+    f"exec yasp-toolkit kernelgen export --input /work/model.py --output /work/artifact/{PT2_FILE}"
+)
 
 
 
@@ -86,7 +111,7 @@ def _read_report(report_dir, code: int) -> Report:
     if not path.exists():
         raise RuntimeError(f"container exited {code} without writing a report")
     report = Report.model_validate_json(path.read_text())
-    if report.error is not None and report.error not in EAGER | PT2 | ONNX | ONNXSIM | TENSORRT | BENCHMARK:
+    if report.error is not None and report.error not in EAGER | ONNX | ONNXSIM | TENSORRT | BENCHMARK:
         raise ValueError(f"report names unknown failure stage {report.error!r}")
     expected = 0 if report.error is None else 1
     if code != expected:
@@ -121,3 +146,46 @@ def run_in_container(state: State) -> State:
         logger.info("container reported failure at stage %s", report.error, extra={"stage": stage})
         return {"error": report.error, "error_detail": report.error_detail}
     return {"benchmark": report.benchmark.model_dump()}
+
+
+def build_export_command(model_path, artifacts_dir, dependencies: list[str]) -> list[str]:
+    """No GPU and no environment from the host: no credential enters the container that runs the user's model."""
+    return [
+        "docker", "run", "--rm",
+        "-v", f"{Path(model_path).resolve()}:/work/model.py:ro",
+        "-v", f"{Path(artifacts_dir).resolve()}:/work/artifact",
+        EXPORT_IMAGE,
+        "sh", "-c", EXPORT_SCRIPT, "kronos-export", *dependencies,
+    ]
+
+
+def run_export(model_path, artifacts_dir, dependencies: list[str]) -> subprocess.CompletedProcess:
+    """Run the export container, capturing its output; a missing docker command raises FileNotFoundError."""
+    return subprocess.run(build_export_command(model_path, artifacts_dir, dependencies), capture_output=True, text=True)
+
+
+def export_reference(state: State) -> State:
+    stage = "export_run"
+    try:
+        artifacts = Path(state["artifacts_path"])
+        logger.info(
+            "exporting the kernelgen reference with yasp-toolkit kernelgen export in %s", EXPORT_IMAGE,
+            extra={"stage": stage},
+        )
+        result = run_export(state["model_path"], artifacts, state["config"].dependencies)
+        output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part and part.strip())
+        for line in output.splitlines():
+            logger.debug("%s", line, extra={"stage": stage})
+        if result.returncode == DEPENDENCIES_FAILED:
+            stage = "export_dependencies"
+            raise RuntimeError(f"pip exited with an error in {EXPORT_IMAGE}\n{output}")
+        stage = "export_reference"
+        if result.returncode != 0:
+            raise RuntimeError(f"yasp-toolkit kernelgen export exited {result.returncode}\n{output}")
+        reference = artifacts / PT2_FILE
+        if not reference.is_file():
+            raise RuntimeError(f"yasp-toolkit kernelgen export exited 0 without writing {PT2_FILE}\n{output}")
+        logger.info("wrote %s", reference, extra={"stage": stage})
+    except Exception as exc:
+        return fail(logger, stage, exc)
+    return {}

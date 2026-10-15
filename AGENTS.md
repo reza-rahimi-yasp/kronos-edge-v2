@@ -9,71 +9,61 @@ decisions: do not add file listings, commands, or summaries here.
 - Two LangGraph graphs: the host graph validates config and environment, the
   container graph runs the model. The host never runs user code.
 - The host must import without torch or numpy. Only the container graph's
-  modules (`eager_check`, `pt2_check`, `onnx_check`, `onnxsim_check`,
-  `tensorrt_check`, `benchmark_check`) import the model stack. A test
+  modules (`eager_check`, `onnx_check`, `onnxsim_check`, `tensorrt_check`,
+  `benchmark_check`) import the model stack. A test
   enforces it.
-- Kernelgen runs on the host, after the container, as `yasp-toolkit`
-  subprocesses (`kernelgen compile`, then `eval compare`): the toolkit needs
-  the user's Yasp API key, which never enters the container, and the host
-  never imports yasp-agent. The `kernelgen` node requires the container's
-  `model.pt2` and `model.engine` before it starts. The toolkit exits 0 after
-  some early HTTP errors, so a node trusts the file it asked for, not the
-  exit code.
-- The kernelgen reference is produced in the container by `torch.export`
-  directly (inference mode, Core ATen decompositions, `torch.export.save`),
-  mirroring `yasp-toolkit kernelgen export`: the image has no yasp-agent and
-  the host must not run user code. It is exported right after the eager pass
-  and from the uncast model.
-- The kernelgen evaluation runs on this machine: `eval compare` is routed to
-  the evaluator registered from it by the `eval_routing` setting, and the same
-  key is passed to `kernelgen compile --eval-routing`. The setting is
+- Gaia is used only through the commands documented at
+  https://compile.yasp.ai/help/, following its "Generate your first kernel"
+  workflow (runner, export, generate, inspect). The repository orchestrates
+  them and implements no part of Gaia: no `yasp-compile-*` package is ever a
+  dependency or an import, no exporter or evaluator is replicated, no service
+  is called except through `yasp-toolkit`, and no field of a Yasp report is
+  parsed. `yasp-agent` is the only yasp package installed directly; what it
+  pulls in is its own.
+- Kernelgen runs on the host, after the containers, as `yasp-toolkit`
+  subprocesses (`kernelgen compile`, then `eval inspect`): the toolkit needs
+  the user's Yasp API key, which never enters a container, and the host never
+  imports yasp-agent, which is installed with pipx as the docs show, not from
+  `requirements.txt`. The `kernelgen` node requires the export's `model.pt2`
+  and the container's `model.engine` before it starts. The toolkit can exit 0
+  after an early error, so a node trusts the files it asked for, not the exit
+  code.
+- The kernelgen reference is produced by the documented `yasp-toolkit
+  kernelgen export`, run on the user's `model.py` in a container from the
+  export image (`docker/gaia-export/Dockerfile`), because it runs user code
+  and the host must not. That image is the docs' install: CPU-only
+  `torch==2.9.1`, then `yasp-agent`, nothing else. Its build reads the yasp
+  package index with a scoped registry key taken as a BuildKit secret (a
+  netrc file mounted for that step alone), never as a build argument,
+  environment variable, URL, or layer. The export runs with no GPU and no
+  key (observed to need neither); the config's `dependencies` are installed
+  there first under the image's constraints. The CPU-only torch traces the
+  reference on the CPU: a GPU-traced reference failed on the kernelgen service
+  with `Torch not compiled with CUDA enabled`, the error a torch built without
+  CUDA raises when loading it, while CPU references were accepted; the
+  service's build is inferred from that, not observed. The export reads
+  `model.py` alone (`Model(*get_init_inputs())`, `get_inputs()`): the
+  reference does not carry the benchmarked instance or `input.npz`, since no
+  documented command takes weights or input arrays, and the README says so.
+  The model-check image carries no yasp package.
+- The kernelgen evaluation runs on the user's Gaia worker on this machine:
+  `kernelgen compile --eval-routing` routes its in-compile evaluations to the
+  pool the worker joined with `--tag routing=<eval_routing>`. The setting is
   required, so a config without it fails validation before any job is
-  submitted; an unrouted job could land on any evaluator with the same GPU
-  name. The kernel must pass
-  the evaluator's correctness checks; its speedup is reported, not judged, and
-  no expectation is derived from TensorRT versus the eager run.
-- A job routed to an evaluator that is not registered waits forever, so the
-  host checks before kernelgen: `yasp-toolkit eval workers` filtered by
-  `eval_routing`, matched exactly on the config's `gpu` and `eval_routing`
-  (the listing's table is parsed; the toolkit has no machine-readable
-  output). When nothing matches, the host starts a uniquely named Gaia NVIDIA
-  worker container as the Gaia Docker deployment guide does, with the newest
-  release of the official worker image, minus what makes a deployment
-  persistent (restart policy, autoheal sidecar, health check): the worker
-  lives for one check. The host depends only on `yasp-agent[gaia]`, never on
-  a standalone evaluator package, and never runs `yasp-eval` itself: that
-  name is the executable inside the image. Scoped registry and registration
-  keys are minted with the toolkit; a key command's output is never logged
-  or put in an error, a key is never a command argument (the registry key
-  goes to `docker login` by stdin under a temporary Docker config, the
-  registration key to `docker create` through its environment), and a
-  Docker error is blanked of the key it was handed. Only the registration
-  key enters the worker, never the user's main API key, and no credential
-  enters the model-check container. The worker has the NVIDIA runtime and
-  the Docker socket for its per-task containers; its GPU name is never
-  overridden. The pull has its own bound; readiness is the listing again,
-  polled for a bounded time that starts after the pull. The container the
-  host created is the only one it removes: it is recorded in state, every
-  path from `ensure_evaluator` on runs `release_evaluator`, a failure after
-  `docker create` removes it by name, and an evaluator found already
-  registered is never touched. As created here, the worker's launcher
-  runs each task as a subprocess inside the worker (its default backend),
-  so the task ends with the worker; configured for its Docker backend, it
-  runs each task in a sibling container under its shared slot name and
-  tears it down when the task is cancelled, which a forced removal
-  (SIGKILL) skips, so the worker is stopped first (`docker stop`, bounded)
-  and removed after. The slot is shared with any other worker on the
-  machine, so it is removed only on proof of ownership: the worker is
-  created with `KRONOS_EVALUATOR=<its container name>` listed in
-  `YASP_LAUNCH_DOCKER_FORWARD_ENV`, the launcher's documented way of copying
-  worker variables into task containers, and once the worker is gone the
-  slot is removed only if one `docker inspect` shows that marker for this
-  worker, and then by the id that inspect returned, never by the shared
-  name, which another worker's task may hold by then; the inspected
-  container being gone counts as removed. A removal failure never replaces
-  the failure that led to it. The toolkit missing while a key is minted is
-  the toolkit stage; Docker or its socket missing is the evaluator command
-  stage.
+  submitted; a worker with no routing tag joins the shared pool, where any
+  job could take it. The reference alone is uploaded (no `--source`), so no
+  user Python runs on the service's side. Gaia returns only a kernel that
+  passed its worker's checks; the check shows the job's report through `eval
+  inspect` and judges nothing itself. No expectation is derived from TensorRT
+  versus the eager run.
+- The Gaia worker is the user's persistent deployment, made once as the Gaia
+  Docker guide documents, with a routing tag added; it stays up and serves
+  every check. A job routed to a pool with no worker waits forever, so before
+  kernelgen the host lists `yasp-toolkit eval workers --tag
+  routing=<eval_routing>`, bounded, and requires a row whose GPU Name and
+  Routing equal the config's `gpu` and `eval_routing` exactly (the listing's
+  table is parsed; the toolkit has no machine-readable output). The check
+  never starts, stops, or removes a worker and mints no key.
 - `config.yaml` has two kinds of fields. The five environment fields must
   equal a registry entry and select the image. Settings (`precision`,
   `metric`, `threshold`) are validated by the same schema but never take part
@@ -140,7 +130,9 @@ decisions: do not add file listings, commands, or summaries here.
   `--artifacts` says otherwise, created by the host and mounted into the
   container. Every such file is listed in `artifacts.py`; the host deletes
   those names, and only those, before each run so a stale file never sits
-  next to a fresh one. Each node writes its own file as soon as it has it, so
+  next to a fresh one. A name an earlier version wrote stays listed there as
+  retired, deleted but never written, so a carried-over directory is cleaned
+  too. Each node writes its own file as soon as it has it, so
   a later failure keeps the earlier files. Intermediate models also stay in
   state in memory for the next node.
 - Model-stack packages (`onnx`, `onnxsim`, and the exporter's lazy imports)
@@ -149,9 +141,11 @@ decisions: do not add file listings, commands, or summaries here.
   crashing the container before it can write the report.
 - Models above the 2 GB protobuf limit are saved with external data and
   checked by path. The onnxsim step is unverified above that size.
-- `yasp-agent[gaia]` comes from the yasp package index, not PyPI; the
-  `README.md` install command names the index. Credentials are documented in
-  `.env.example` only; nothing reads a `.env` file.
+- `yasp-agent` comes from the yasp package index, not PyPI, read with a
+  registry key that reaches pip through a temporary netrc file, never a
+  command line; the `README.md` install command names the index.
+  Credentials are documented in `.env.example` only; nothing reads a `.env`
+  file.
 
 ## Node conventions
 
