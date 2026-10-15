@@ -25,6 +25,20 @@ def test_host_imports_without_torch_or_numpy():
     assert "host ok" in result.stdout
 
 
+def test_no_yasp_package_is_a_dependency_of_the_project():
+    """yasp-toolkit is installed on its own with pipx and only run as a command, so neither install path pulls it in."""
+    import re
+    import tomllib
+
+    root = SRC.parent
+    declared = tomllib.loads((root / "pyproject.toml").read_text())["project"]["dependencies"]
+    required = [line for line in (root / "requirements.txt").read_text().splitlines() if line.strip() and not line.startswith("#")]
+    names = [re.split(r"[\[<>=!~ ;]", requirement, maxsplit=1)[0].lower() for requirement in [*declared, *required]]
+
+    assert names, "no dependencies parsed"
+    assert [name for name in names if name.startswith("yasp")] == []
+
+
 def test_merge_rejects_duplicate_stage_names():
     with pytest.raises(ValueError, match="load"):
         messages.merge({"load": "a"}, {"load": "b"})

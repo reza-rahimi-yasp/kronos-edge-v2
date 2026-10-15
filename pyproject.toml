@@ -11,7 +11,6 @@ dependencies = [
     "pydantic",
     "pyyaml",
     "torch",
-    "yasp-agent[gaia]",
 ]
 
 [dependency-groups]
