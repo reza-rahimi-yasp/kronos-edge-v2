@@ -1,0 +1,6 @@
+# Disposable diagnostic image for docs/reference-timing.md: the Kronos environment image plus timm, pinned the way the container itself pins
+# run-time dependencies (every distribution already in the venv is a constraint).
+FROM kronos-edge:rtx5090-cuda130
+RUN pip list --format=freeze > /tmp/constraints.txt \
+    && pip install --no-cache-dir -c /tmp/constraints.txt timm \
+    && rm /tmp/constraints.txt

@@ -342,7 +342,11 @@ construction is deterministic (seed it in `__init__`, as the docs' example
 model does); its example inputs are what `get_inputs()` returns, with the
 shapes and dtypes `input.npz` matches but not its values. The TensorRT result
 and the kernelgen result are separate comparisons with the model; neither is
-derived from the other.
+derived from the other. The reference latency in the kernelgen report is the
+latency of that exported, decomposed graph, not of your model as written, so
+it can be well above the eager latency printed by the benchmark; the kernelgen
+speedup is relative to the graph. `docs/reference-timing.md` shows a case where
+the graph took twice the eager time and why.
 
 Then the check confirms your Gaia worker is registered (see "Deploy the Gaia
 worker") and runs the documented generation, the
