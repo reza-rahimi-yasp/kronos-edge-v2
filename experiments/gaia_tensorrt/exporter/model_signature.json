@@ -1,0 +1,1819 @@
+{
+ "source": "model.pt2 written by yasp-toolkit kernelgen export; inspected with torch.export.load inside the dev container",
+ "pt2_sha256": "97eda434c5eee6137b7b29d62c465771bf5aefa3a1b49c6828c740832b6981ea",
+ "input": {
+  "name": "x",
+  "shape": [
+   4,
+   3,
+   1088,
+   1920
+  ],
+  "dtype": "float32"
+ },
+ "output": {
+  "name": "add_54",
+  "shape": [
+   4,
+   256,
+   34,
+   60
+  ],
+  "dtype": "float32"
+ },
+ "parameters": [
+  {
+   "fqn": "m.stem.in_conv.conv.weight",
+   "shape": [
+    16,
+    3,
+    3,
+    3
+   ]
+  },
+  {
+   "fqn": "m.stem.in_conv.norm.weight",
+   "shape": [
+    16
+   ]
+  },
+  {
+   "fqn": "m.stem.in_conv.norm.bias",
+   "shape": [
+    16
+   ]
+  },
+  {
+   "fqn": "m.stem.res0.main.depth_conv.conv.weight",
+   "shape": [
+    16,
+    1,
+    3,
+    3
+   ]
+  },
+  {
+   "fqn": "m.stem.res0.main.depth_conv.norm.weight",
+   "shape": [
+    16
+   ]
+  },
+  {
+   "fqn": "m.stem.res0.main.depth_conv.norm.bias",
+   "shape": [
+    16
+   ]
+  },
+  {
+   "fqn": "m.stem.res0.main.point_conv.conv.weight",
+   "shape": [
+    16,
+    16,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stem.res0.main.point_conv.norm.weight",
+   "shape": [
+    16
+   ]
+  },
+  {
+   "fqn": "m.stem.res0.main.point_conv.norm.bias",
+   "shape": [
+    16
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.0.main.inverted_conv.conv.weight",
+   "shape": [
+    64,
+    16,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.0.main.inverted_conv.norm.weight",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.0.main.inverted_conv.norm.bias",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.0.main.depth_conv.conv.weight",
+   "shape": [
+    64,
+    1,
+    3,
+    3
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.0.main.depth_conv.norm.weight",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.0.main.depth_conv.norm.bias",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.0.main.point_conv.conv.weight",
+   "shape": [
+    32,
+    64,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.0.main.point_conv.norm.weight",
+   "shape": [
+    32
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.0.main.point_conv.norm.bias",
+   "shape": [
+    32
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.1.main.inverted_conv.conv.weight",
+   "shape": [
+    128,
+    32,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.1.main.inverted_conv.norm.weight",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.1.main.inverted_conv.norm.bias",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.1.main.depth_conv.conv.weight",
+   "shape": [
+    128,
+    1,
+    3,
+    3
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.1.main.depth_conv.norm.weight",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.1.main.depth_conv.norm.bias",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.1.main.point_conv.conv.weight",
+   "shape": [
+    32,
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.1.main.point_conv.norm.weight",
+   "shape": [
+    32
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.1.main.point_conv.norm.bias",
+   "shape": [
+    32
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.0.main.inverted_conv.conv.weight",
+   "shape": [
+    128,
+    32,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.0.main.inverted_conv.norm.weight",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.0.main.inverted_conv.norm.bias",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.0.main.depth_conv.conv.weight",
+   "shape": [
+    128,
+    1,
+    3,
+    3
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.0.main.depth_conv.norm.weight",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.0.main.depth_conv.norm.bias",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.0.main.point_conv.conv.weight",
+   "shape": [
+    64,
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.0.main.point_conv.norm.weight",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.0.main.point_conv.norm.bias",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.1.main.inverted_conv.conv.weight",
+   "shape": [
+    256,
+    64,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.1.main.inverted_conv.norm.weight",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.1.main.inverted_conv.norm.bias",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.1.main.depth_conv.conv.weight",
+   "shape": [
+    256,
+    1,
+    3,
+    3
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.1.main.depth_conv.norm.weight",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.1.main.depth_conv.norm.bias",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.1.main.point_conv.conv.weight",
+   "shape": [
+    64,
+    256,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.1.main.point_conv.norm.weight",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.1.main.point_conv.norm.bias",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.2.main.inverted_conv.conv.weight",
+   "shape": [
+    256,
+    64,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.2.main.inverted_conv.norm.weight",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.2.main.inverted_conv.norm.bias",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.2.main.depth_conv.conv.weight",
+   "shape": [
+    256,
+    1,
+    3,
+    3
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.2.main.depth_conv.norm.weight",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.2.main.depth_conv.norm.bias",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.2.main.point_conv.conv.weight",
+   "shape": [
+    64,
+    256,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.2.main.point_conv.norm.weight",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.2.main.point_conv.norm.bias",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.0.main.inverted_conv.conv.weight",
+   "shape": [
+    256,
+    64,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.0.main.inverted_conv.conv.bias",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.0.main.depth_conv.conv.weight",
+   "shape": [
+    256,
+    1,
+    3,
+    3
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.0.main.depth_conv.conv.bias",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.0.main.point_conv.conv.weight",
+   "shape": [
+    128,
+    256,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.0.main.point_conv.norm.weight",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.0.main.point_conv.norm.bias",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.1.context_module.main.qkv.conv.weight",
+   "shape": [
+    384,
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.1.context_module.main.aggreg.0.0.weight",
+   "shape": [
+    384,
+    1,
+    5,
+    5
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.1.context_module.main.aggreg.0.1.weight",
+   "shape": [
+    384,
+    16,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.1.context_module.main.proj.conv.weight",
+   "shape": [
+    128,
+    256,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.1.context_module.main.proj.norm.weight",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.1.context_module.main.proj.norm.bias",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.1.local_module.main.inverted_conv.conv.weight",
+   "shape": [
+    512,
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.1.local_module.main.inverted_conv.conv.bias",
+   "shape": [
+    512
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.1.local_module.main.depth_conv.conv.weight",
+   "shape": [
+    512,
+    1,
+    3,
+    3
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.1.local_module.main.depth_conv.conv.bias",
+   "shape": [
+    512
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.1.local_module.main.point_conv.conv.weight",
+   "shape": [
+    128,
+    512,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.1.local_module.main.point_conv.norm.weight",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.1.local_module.main.point_conv.norm.bias",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.2.context_module.main.qkv.conv.weight",
+   "shape": [
+    384,
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.2.context_module.main.aggreg.0.0.weight",
+   "shape": [
+    384,
+    1,
+    5,
+    5
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.2.context_module.main.aggreg.0.1.weight",
+   "shape": [
+    384,
+    16,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.2.context_module.main.proj.conv.weight",
+   "shape": [
+    128,
+    256,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.2.context_module.main.proj.norm.weight",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.2.context_module.main.proj.norm.bias",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.2.local_module.main.inverted_conv.conv.weight",
+   "shape": [
+    512,
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.2.local_module.main.inverted_conv.conv.bias",
+   "shape": [
+    512
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.2.local_module.main.depth_conv.conv.weight",
+   "shape": [
+    512,
+    1,
+    3,
+    3
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.2.local_module.main.depth_conv.conv.bias",
+   "shape": [
+    512
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.2.local_module.main.point_conv.conv.weight",
+   "shape": [
+    128,
+    512,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.2.local_module.main.point_conv.norm.weight",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.2.local_module.main.point_conv.norm.bias",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.3.context_module.main.qkv.conv.weight",
+   "shape": [
+    384,
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.3.context_module.main.aggreg.0.0.weight",
+   "shape": [
+    384,
+    1,
+    5,
+    5
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.3.context_module.main.aggreg.0.1.weight",
+   "shape": [
+    384,
+    16,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.3.context_module.main.proj.conv.weight",
+   "shape": [
+    128,
+    256,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.3.context_module.main.proj.norm.weight",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.3.context_module.main.proj.norm.bias",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.3.local_module.main.inverted_conv.conv.weight",
+   "shape": [
+    512,
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.3.local_module.main.inverted_conv.conv.bias",
+   "shape": [
+    512
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.3.local_module.main.depth_conv.conv.weight",
+   "shape": [
+    512,
+    1,
+    3,
+    3
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.3.local_module.main.depth_conv.conv.bias",
+   "shape": [
+    512
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.3.local_module.main.point_conv.conv.weight",
+   "shape": [
+    128,
+    512,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.3.local_module.main.point_conv.norm.weight",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.3.local_module.main.point_conv.norm.bias",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.0.main.inverted_conv.conv.weight",
+   "shape": [
+    512,
+    128,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.0.main.inverted_conv.conv.bias",
+   "shape": [
+    512
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.0.main.depth_conv.conv.weight",
+   "shape": [
+    512,
+    1,
+    3,
+    3
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.0.main.depth_conv.conv.bias",
+   "shape": [
+    512
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.0.main.point_conv.conv.weight",
+   "shape": [
+    256,
+    512,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.0.main.point_conv.norm.weight",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.0.main.point_conv.norm.bias",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.1.context_module.main.qkv.conv.weight",
+   "shape": [
+    768,
+    256,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.1.context_module.main.aggreg.0.0.weight",
+   "shape": [
+    768,
+    1,
+    5,
+    5
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.1.context_module.main.aggreg.0.1.weight",
+   "shape": [
+    768,
+    16,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.1.context_module.main.proj.conv.weight",
+   "shape": [
+    256,
+    512,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.1.context_module.main.proj.norm.weight",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.1.context_module.main.proj.norm.bias",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.1.local_module.main.inverted_conv.conv.weight",
+   "shape": [
+    1024,
+    256,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.1.local_module.main.inverted_conv.conv.bias",
+   "shape": [
+    1024
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.1.local_module.main.depth_conv.conv.weight",
+   "shape": [
+    1024,
+    1,
+    3,
+    3
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.1.local_module.main.depth_conv.conv.bias",
+   "shape": [
+    1024
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.1.local_module.main.point_conv.conv.weight",
+   "shape": [
+    256,
+    1024,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.1.local_module.main.point_conv.norm.weight",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.1.local_module.main.point_conv.norm.bias",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.2.context_module.main.qkv.conv.weight",
+   "shape": [
+    768,
+    256,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.2.context_module.main.aggreg.0.0.weight",
+   "shape": [
+    768,
+    1,
+    5,
+    5
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.2.context_module.main.aggreg.0.1.weight",
+   "shape": [
+    768,
+    16,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.2.context_module.main.proj.conv.weight",
+   "shape": [
+    256,
+    512,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.2.context_module.main.proj.norm.weight",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.2.context_module.main.proj.norm.bias",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.2.local_module.main.inverted_conv.conv.weight",
+   "shape": [
+    1024,
+    256,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.2.local_module.main.inverted_conv.conv.bias",
+   "shape": [
+    1024
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.2.local_module.main.depth_conv.conv.weight",
+   "shape": [
+    1024,
+    1,
+    3,
+    3
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.2.local_module.main.depth_conv.conv.bias",
+   "shape": [
+    1024
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.2.local_module.main.point_conv.conv.weight",
+   "shape": [
+    256,
+    1024,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.2.local_module.main.point_conv.norm.weight",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.2.local_module.main.point_conv.norm.bias",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.3.context_module.main.qkv.conv.weight",
+   "shape": [
+    768,
+    256,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.3.context_module.main.aggreg.0.0.weight",
+   "shape": [
+    768,
+    1,
+    5,
+    5
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.3.context_module.main.aggreg.0.1.weight",
+   "shape": [
+    768,
+    16,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.3.context_module.main.proj.conv.weight",
+   "shape": [
+    256,
+    512,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.3.context_module.main.proj.norm.weight",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.3.context_module.main.proj.norm.bias",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.3.local_module.main.inverted_conv.conv.weight",
+   "shape": [
+    1024,
+    256,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.3.local_module.main.inverted_conv.conv.bias",
+   "shape": [
+    1024
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.3.local_module.main.depth_conv.conv.weight",
+   "shape": [
+    1024,
+    1,
+    3,
+    3
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.3.local_module.main.depth_conv.conv.bias",
+   "shape": [
+    1024
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.3.local_module.main.point_conv.conv.weight",
+   "shape": [
+    256,
+    1024,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.3.local_module.main.point_conv.norm.weight",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.3.local_module.main.point_conv.norm.bias",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.4.context_module.main.qkv.conv.weight",
+   "shape": [
+    768,
+    256,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.4.context_module.main.aggreg.0.0.weight",
+   "shape": [
+    768,
+    1,
+    5,
+    5
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.4.context_module.main.aggreg.0.1.weight",
+   "shape": [
+    768,
+    16,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.4.context_module.main.proj.conv.weight",
+   "shape": [
+    256,
+    512,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.4.context_module.main.proj.norm.weight",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.4.context_module.main.proj.norm.bias",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.4.local_module.main.inverted_conv.conv.weight",
+   "shape": [
+    1024,
+    256,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.4.local_module.main.inverted_conv.conv.bias",
+   "shape": [
+    1024
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.4.local_module.main.depth_conv.conv.weight",
+   "shape": [
+    1024,
+    1,
+    3,
+    3
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.4.local_module.main.depth_conv.conv.bias",
+   "shape": [
+    1024
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.4.local_module.main.point_conv.conv.weight",
+   "shape": [
+    256,
+    1024,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.4.local_module.main.point_conv.norm.weight",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.4.local_module.main.point_conv.norm.bias",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.head.in_conv.conv.weight",
+   "shape": [
+    1536,
+    256,
+    1,
+    1
+   ]
+  },
+  {
+   "fqn": "m.head.in_conv.norm.weight",
+   "shape": [
+    1536
+   ]
+  },
+  {
+   "fqn": "m.head.in_conv.norm.bias",
+   "shape": [
+    1536
+   ]
+  },
+  {
+   "fqn": "m.head.classifier.0.weight",
+   "shape": [
+    1600,
+    1536
+   ]
+  },
+  {
+   "fqn": "m.head.classifier.1.weight",
+   "shape": [
+    1600
+   ]
+  },
+  {
+   "fqn": "m.head.classifier.1.bias",
+   "shape": [
+    1600
+   ]
+  },
+  {
+   "fqn": "m.head.classifier.4.weight",
+   "shape": [
+    1000,
+    1600
+   ]
+  },
+  {
+   "fqn": "m.head.classifier.4.bias",
+   "shape": [
+    1000
+   ]
+  }
+ ],
+ "buffers": [
+  {
+   "fqn": "m.stem.in_conv.norm.running_mean",
+   "shape": [
+    16
+   ]
+  },
+  {
+   "fqn": "m.stem.in_conv.norm.running_var",
+   "shape": [
+    16
+   ]
+  },
+  {
+   "fqn": "m.stem.in_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stem.res0.main.depth_conv.norm.running_mean",
+   "shape": [
+    16
+   ]
+  },
+  {
+   "fqn": "m.stem.res0.main.depth_conv.norm.running_var",
+   "shape": [
+    16
+   ]
+  },
+  {
+   "fqn": "m.stem.res0.main.depth_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stem.res0.main.point_conv.norm.running_mean",
+   "shape": [
+    16
+   ]
+  },
+  {
+   "fqn": "m.stem.res0.main.point_conv.norm.running_var",
+   "shape": [
+    16
+   ]
+  },
+  {
+   "fqn": "m.stem.res0.main.point_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.0.blocks.0.main.inverted_conv.norm.running_mean",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.0.main.inverted_conv.norm.running_var",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.0.main.inverted_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.0.blocks.0.main.depth_conv.norm.running_mean",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.0.main.depth_conv.norm.running_var",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.0.main.depth_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.0.blocks.0.main.point_conv.norm.running_mean",
+   "shape": [
+    32
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.0.main.point_conv.norm.running_var",
+   "shape": [
+    32
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.0.main.point_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.0.blocks.1.main.inverted_conv.norm.running_mean",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.1.main.inverted_conv.norm.running_var",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.1.main.inverted_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.0.blocks.1.main.depth_conv.norm.running_mean",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.1.main.depth_conv.norm.running_var",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.1.main.depth_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.0.blocks.1.main.point_conv.norm.running_mean",
+   "shape": [
+    32
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.1.main.point_conv.norm.running_var",
+   "shape": [
+    32
+   ]
+  },
+  {
+   "fqn": "m.stages.0.blocks.1.main.point_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.1.blocks.0.main.inverted_conv.norm.running_mean",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.0.main.inverted_conv.norm.running_var",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.0.main.inverted_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.1.blocks.0.main.depth_conv.norm.running_mean",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.0.main.depth_conv.norm.running_var",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.0.main.depth_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.1.blocks.0.main.point_conv.norm.running_mean",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.0.main.point_conv.norm.running_var",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.0.main.point_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.1.blocks.1.main.inverted_conv.norm.running_mean",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.1.main.inverted_conv.norm.running_var",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.1.main.inverted_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.1.blocks.1.main.depth_conv.norm.running_mean",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.1.main.depth_conv.norm.running_var",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.1.main.depth_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.1.blocks.1.main.point_conv.norm.running_mean",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.1.main.point_conv.norm.running_var",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.1.main.point_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.1.blocks.2.main.inverted_conv.norm.running_mean",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.2.main.inverted_conv.norm.running_var",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.2.main.inverted_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.1.blocks.2.main.depth_conv.norm.running_mean",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.2.main.depth_conv.norm.running_var",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.2.main.depth_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.1.blocks.2.main.point_conv.norm.running_mean",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.2.main.point_conv.norm.running_var",
+   "shape": [
+    64
+   ]
+  },
+  {
+   "fqn": "m.stages.1.blocks.2.main.point_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.2.blocks.0.main.point_conv.norm.running_mean",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.0.main.point_conv.norm.running_var",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.0.main.point_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.2.blocks.1.context_module.main.proj.norm.running_mean",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.1.context_module.main.proj.norm.running_var",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.1.context_module.main.proj.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.2.blocks.1.local_module.main.point_conv.norm.running_mean",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.1.local_module.main.point_conv.norm.running_var",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.1.local_module.main.point_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.2.blocks.2.context_module.main.proj.norm.running_mean",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.2.context_module.main.proj.norm.running_var",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.2.context_module.main.proj.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.2.blocks.2.local_module.main.point_conv.norm.running_mean",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.2.local_module.main.point_conv.norm.running_var",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.2.local_module.main.point_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.2.blocks.3.context_module.main.proj.norm.running_mean",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.3.context_module.main.proj.norm.running_var",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.3.context_module.main.proj.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.2.blocks.3.local_module.main.point_conv.norm.running_mean",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.3.local_module.main.point_conv.norm.running_var",
+   "shape": [
+    128
+   ]
+  },
+  {
+   "fqn": "m.stages.2.blocks.3.local_module.main.point_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.3.blocks.0.main.point_conv.norm.running_mean",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.0.main.point_conv.norm.running_var",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.0.main.point_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.3.blocks.1.context_module.main.proj.norm.running_mean",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.1.context_module.main.proj.norm.running_var",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.1.context_module.main.proj.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.3.blocks.1.local_module.main.point_conv.norm.running_mean",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.1.local_module.main.point_conv.norm.running_var",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.1.local_module.main.point_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.3.blocks.2.context_module.main.proj.norm.running_mean",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.2.context_module.main.proj.norm.running_var",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.2.context_module.main.proj.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.3.blocks.2.local_module.main.point_conv.norm.running_mean",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.2.local_module.main.point_conv.norm.running_var",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.2.local_module.main.point_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.3.blocks.3.context_module.main.proj.norm.running_mean",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.3.context_module.main.proj.norm.running_var",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.3.context_module.main.proj.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.3.blocks.3.local_module.main.point_conv.norm.running_mean",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.3.local_module.main.point_conv.norm.running_var",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.3.local_module.main.point_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.3.blocks.4.context_module.main.proj.norm.running_mean",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.4.context_module.main.proj.norm.running_var",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.4.context_module.main.proj.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.stages.3.blocks.4.local_module.main.point_conv.norm.running_mean",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.4.local_module.main.point_conv.norm.running_var",
+   "shape": [
+    256
+   ]
+  },
+  {
+   "fqn": "m.stages.3.blocks.4.local_module.main.point_conv.norm.num_batches_tracked",
+   "shape": []
+  },
+  {
+   "fqn": "m.head.in_conv.norm.running_mean",
+   "shape": [
+    1536
+   ]
+  },
+  {
+   "fqn": "m.head.in_conv.norm.running_var",
+   "shape": [
+    1536
+   ]
+  },
+  {
+   "fqn": "m.head.in_conv.norm.num_batches_tracked",
+   "shape": []
+  }
+ ],
+ "pt2_op_counts": {
+  "aten.convolution.default": 73,
+  "aten.bmm.default": 14,
+  "aten._native_batch_norm_legit_no_training.default": 34
+ }
+}
