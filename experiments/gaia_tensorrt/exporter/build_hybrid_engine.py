@@ -18,7 +18,14 @@ flags, TF32 allowed for the native layers) and hybrid_notf32.engine.
 One engine per process: TensorRT keeps the first logger of a process and a
 second build in the same process crashed, so the setting is a parameter.
 
-Usage: build_hybrid_engine.py <weights.npz> <signature.json> <plugin .so> <out dir> <default|notf32>
+Usage: build_hybrid_engine.py <weights.npz> <signature.json> <plugin .so> <out dir> <default|notf32> [inspect|-] [any|linear|hwc]
+With ``inspect``, the engine is built with ProfilingVerbosity.DETAILED and
+written as <prefix>_<setting>.inspect.engine for inspect_engine.py; the
+benchmarked engines are built without it. The layout argument is every
+plugin's "layout" field: ``any`` (the default) offers TensorRT both the
+linear and the kHWC layout and lets it choose, ``linear`` reproduces the
+baseline's linear-only plugins, ``hwc`` forces the channel-last kernels. The
+prefix is ``hybrid`` for ``any`` and ``hybrid_<layout>`` otherwise.
 """
 
 import json
@@ -34,8 +41,15 @@ import schedule
 import trt_build
 
 
-def main(weights_path: str, signature_path: str, plugin_lib: str, out_dir: str, setting: str) -> None:
+def main(weights_path: str, signature_path: str, plugin_lib: str, out_dir: str, setting: str, inspect: str = "-", layout: str = "any") -> None:
     out = Path(out_dir)
+    if inspect not in ("-", "inspect"):
+        raise SystemExit("the sixth argument must be 'inspect' or '-'")
+    if layout not in plugin_spec.LAYOUTS:
+        raise SystemExit(f"the seventh argument must be one of {sorted(plugin_spec.LAYOUTS)}")
+    detailed = inspect == "inspect"
+    layout_field = plugin_spec.LAYOUTS[layout]
+    prefix = "hybrid" if layout == "any" else f"hybrid_{layout}"
     signature = json.loads(Path(signature_path).read_text())
     weights = np.load(weights_path)
     ops = schedule.build(signature)
@@ -81,7 +95,7 @@ def main(weights_path: str, signature_path: str, plugin_lib: str, out_dir: str, 
             elif kind == "dw":
                 plugin = plugin_spec.make_plugin(trt, registry, plugin_spec.DEPTHWISE, {
                     "k": op["k"], "s": op["s"], "pre": op["pre"], "act": op["act"], "emit": op["emit"],
-                    "in_mode": op["in_aff"]["mode"], "out_mode": op["out_aff"]["mode"]})
+                    "in_mode": op["in_aff"]["mode"], "out_mode": op["out_aff"]["mode"], "layout": layout_field})
                 inputs = [tensors[op["x"]], const(weights[f"p{op['w']}"], f"{op['out']}.w")]
                 inputs += affine_inputs(op["in_aff"], f"{op['out']}.in") + affine_inputs(op["out_aff"], f"{op['out']}.out")
                 layer = network.add_plugin_v3(inputs, [], plugin)
@@ -92,7 +106,7 @@ def main(weights_path: str, signature_path: str, plugin_lib: str, out_dir: str, 
                 plugin_layers += 1
             elif kind == "epilogue":
                 plugin = plugin_spec.make_plugin(trt, registry, plugin_spec.EPILOGUE, {
-                    "mode": op["aff"]["mode"], "act": op["act"], "has_res": int(op["res"] is not None)})
+                    "mode": op["aff"]["mode"], "act": op["act"], "has_res": int(op["res"] is not None), "layout": layout_field})
                 inputs = [tensors[op["x"]]] + affine_inputs(op["aff"], op["out"])
                 if op["res"] is not None:
                     inputs.append(tensors[op["res"]])
@@ -101,7 +115,7 @@ def main(weights_path: str, signature_path: str, plugin_lib: str, out_dir: str, 
                 tensors[op["out"]] = layer.get_output(0)
                 plugin_layers += 1
             elif kind == "attn_prep":
-                plugin = plugin_spec.make_plugin(trt, registry, plugin_spec.ATTN_PREP, {})
+                plugin = plugin_spec.make_plugin(trt, registry, plugin_spec.ATTN_PREP, {"layout": layout_field})
                 layer = network.add_plugin_v3([tensors[op["qkv"]], tensors[op["agg"]]], [], plugin)
                 layer.name = op["out"][0]
                 for i, name in enumerate(op["out"]):
@@ -114,7 +128,7 @@ def main(weights_path: str, signature_path: str, plugin_lib: str, out_dir: str, 
                 tensors[op["out"]] = layer.get_output(0)
             elif kind == "attn_final":
                 b, _, h, w = shapes[op["ref"]]
-                plugin = plugin_spec.make_plugin(trt, registry, plugin_spec.ATTN_FINAL, {"batch": b, "height": h, "width": w})
+                plugin = plugin_spec.make_plugin(trt, registry, plugin_spec.ATTN_FINAL, {"batch": b, "height": h, "width": w, "layout": layout_field})
                 layer = network.add_plugin_v3([tensors[op["r"]]], [], plugin)
                 layer.name = op["out"]
                 tensors[op["out"]] = layer.get_output(0)
@@ -131,16 +145,16 @@ def main(weights_path: str, signature_path: str, plugin_lib: str, out_dir: str, 
         network.mark_output(output)
 
         t0 = time.time()
-        data, info = trt_build.build_serialized(log, builder, network, tf32)
+        data, info = trt_build.build_serialized(log, builder, network, tf32, detailed)
         info.update({
-            "setting": setting, "build_seconds": time.time() - t0, "plugin_layers": plugin_layers,
+            "setting": setting, "layout": layout, "build_seconds": time.time() - t0, "plugin_layers": plugin_layers,
             "plugins": {"library": plugin_lib, "namespace": plugin_spec.NAMESPACE, "version": plugin_spec.VERSION},
             "input_shape": input_shape, "output_shape": shapes[ops[-1]["out"]],
             "weights_npz": weights_path, "io": trt_build.engine_io(data),
         })
-        trt_build.write_engine(out / f"hybrid_{setting}.engine", data, info)
+        trt_build.write_engine(out / (f"{prefix}_{setting}.inspect.engine" if detailed else f"{prefix}_{setting}.engine"), data, info)
         print(json.dumps({k: v for k, v in info.items() if k != "io"}, indent=2), flush=True)
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:6])
+    main(*sys.argv[1:8])

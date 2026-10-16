@@ -36,3 +36,11 @@ def test_runtime_image_installs_no_python():
     runtime = (EXPERIMENT / "docker" / "runtime" / "Dockerfile").read_text()
     assert "python" not in runtime.lower().replace("no python", "")
     assert "pip" not in runtime.lower()
+
+
+def test_gpu_containers_run_under_the_shared_lock_when_gpu_lock_is_set():
+    container = (EXPERIMENT / "scripts" / "container.sh").read_text()
+    run_all = (EXPERIMENT / "scripts" / "run_all.sh").read_text()
+    assert 'flock "$GPU_LOCK"' in container and "GPU_LOCK" in run_all
+    assert "gaia-trt-layouts-dev:local" in run_all and "gaia-trt-layouts-runtime:local" in run_all  # the baseline's images are never overwritten
+    assert "gaia-trt-plugins-dev:local" not in run_all and "gaia-trt-plugins-runtime:local" not in run_all

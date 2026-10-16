@@ -1,24 +1,28 @@
-"""Names, version, namespace and fields of the four plugins, shared with plugins/gaia_plugins.h.
+"""Names, version, namespace, library and fields of the four layout-aware plugins, shared with plugins/gaia_plugins.h.
 
 Pure Python: the CPU tests import it to check it against the C++ header.
 ``make_plugin`` is the only function that touches TensorRT, and only through
 the ``trt`` module handed to it, so this module imports nothing heavy.
 """
 
-NAMESPACE = "gaia_effvit"
+NAMESPACE = "gaia_effvit_layout"  # the baseline's plugins live in "gaia_effvit"; both libraries can load in one process
 VERSION = "1"
+LIBRARY = "libgaia_trt_layout_plugins.so"
+REGISTER_SYMBOL = "gaia_trt_layout_register_plugins"
 
 DEPTHWISE = "GaiaDepthwiseHswish"
 EPILOGUE = "GaiaEpilogue"
 ATTN_PREP = "GaiaAttnPrep"
 ATTN_FINAL = "GaiaAttnFinal"
 
-# Field names in the order the C++ creators advertise them; every field is one INT32.
+# Field names in the order the C++ creators advertise them; every field is one INT32. Every plugin ends with
+# "layout": which layouts it offers TensorRT for its activation tensors.
+LAYOUTS = {"any": 0, "linear": 1, "hwc": 2}  # 0: linear or kHWC, TensorRT chooses by timing; 1: linear only; 2: kHWC only
 FIELDS = {
-    DEPTHWISE: ("k", "s", "pre", "act", "emit", "in_mode", "out_mode"),
-    EPILOGUE: ("mode", "act", "has_res"),
-    ATTN_PREP: (),
-    ATTN_FINAL: ("batch", "height", "width"),
+    DEPTHWISE: ("k", "s", "pre", "act", "emit", "in_mode", "out_mode", "layout"),
+    EPILOGUE: ("mode", "act", "has_res", "layout"),
+    ATTN_PREP: ("layout",),
+    ATTN_FINAL: ("batch", "height", "width", "layout"),
 }
 
 
