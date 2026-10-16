@@ -57,11 +57,18 @@ def load_plugins(path: str) -> None:
     import ctypes
 
     lib = ctypes.CDLL(path)
-    lib.gaia_trt_register_plugins.restype = ctypes.c_bool
-    if not lib.gaia_trt_register_plugins():
-        raise RuntimeError(f"gaia_trt_register_plugins() failed for {path}")
-    global _PLUGIN_LIB
-    _PLUGIN_LIB = lib  # keep the handle alive for the process
+    # Each experiment library exports its own entry point: the hybrid plugins' or the whole-model plugin's.
+    for symbol in ("gaia_trt_register_plugins", "gaia_trt_whole_model_register_plugins"):
+        if hasattr(lib, symbol):
+            break
+    else:
+        raise RuntimeError(f"{path} exports no known plugin registration entry point")
+    register = getattr(lib, symbol)
+    register.restype = ctypes.c_bool
+    if not register():
+        raise RuntimeError(f"{symbol}() failed for {path}")
+    global _PLUGIN_LIBS
+    _PLUGIN_LIBS = globals().get("_PLUGIN_LIBS", []) + [lib]  # keep the handles alive for the process
 
 
 def engine_io(data: bytes) -> list[dict]:
