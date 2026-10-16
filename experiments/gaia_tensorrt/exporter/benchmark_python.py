@@ -5,7 +5,9 @@ Runs inside the dev container with the GPU. Timer: the product's unmodified
 no synchronization between runs, no cache flush) on the default stream, as
 the product measures. Three trials, the order of the subjects reversed on
 the second. Outputs are checked against the Gaia output before and after
-timing (cosine threshold from the command line). Settings:
+timing (cosine threshold from the command line); a failed check in either
+phase writes the report with the problems and exits nonzero, so a run that
+published latencies for an invalid output cannot look successful. Settings:
   default  torch defaults, *_default.engine (TF32 allowed in TensorRT)
   notf32   matmul/cudnn allow_tf32 False, *_notf32.engine (TF32 flag cleared)
 
@@ -21,6 +23,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+import checks
 import trt_build
 from kronos_edge.benchmark_check import RUNS, WARMUP, EngineRunner, cosine, flatten_outputs, stats, timed
 
@@ -80,10 +83,12 @@ def main(pt2_path: str, kernel_path: str, out_dir: str, plugin_lib: str, thresho
                    **{f"{n}_{setting}.engine": hashlib.sha256((out / f"{n}_{setting}.engine").read_bytes()).hexdigest() for n in ("hybrid", "pure")}},
         "checks_before": {}, "trials": [], "checks_after": {},
     }
+    report_path = out / f"benchmark_python_{setting}.json"
     with torch.no_grad():
         for name in fns:
             result["checks_before"][name] = check(name)
-            assert result["checks_before"][name]["finite"] and result["checks_before"][name]["cosine"] >= threshold, (name, result["checks_before"][name])
+        if not checks.finish_report(report_path, result, threshold):
+            raise SystemExit(f"pre-timing checks failed, nothing timed; see {report_path}: {result['check_problems']}")
         for trial in range(TRIALS):
             order = list(fns) if trial % 2 == 0 else list(fns)[::-1]
             samples = {name: timed(fns[name], True) for name in order}
@@ -96,9 +101,10 @@ def main(pt2_path: str, kernel_path: str, out_dir: str, plugin_lib: str, thresho
     med = {n: result["aggregate_ms"][n]["median"] for n in fns}
     result["median_ratios"] = {"gaia_over_hybrid": med["gaia_optimized"] / med["hybrid_trt"], "pure_over_hybrid": med["pure_trt"] / med["hybrid_trt"],
                                "gaia_over_pure": med["gaia_optimized"] / med["pure_trt"]}
-    result["all_checks_passed"] = all(c["finite"] and c["cosine"] >= threshold for d in (result["checks_before"], result["checks_after"]) for c in d.values())
-    (out / f"benchmark_python_{setting}.json").write_text(json.dumps(result, indent=2))
-    print(json.dumps({k: result[k] for k in ("environment", "aggregate_ms", "median_ratios", "all_checks_passed")}, indent=2))
+    passed = checks.finish_report(report_path, result, threshold)
+    print(json.dumps({k: result[k] for k in ("environment", "aggregate_ms", "median_ratios", "all_checks_passed", "check_problems")}, indent=2))
+    if not passed:
+        raise SystemExit(f"post-timing checks failed; the report is kept at {report_path}: {result['check_problems']}")
 
 
 if __name__ == "__main__":

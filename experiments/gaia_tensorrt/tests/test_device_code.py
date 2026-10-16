@@ -74,3 +74,27 @@ def test_out_of_place_epilogue_is_the_generated_kernel_with_renamed_accesses(hea
     )
     assert expected != pristine  # the three substitutions all applied
     assert _kernel_body(adapted, "epilogue_kernel_oop") == expected
+
+
+def _fake_kernel_module(header: str) -> str:
+    """A kernel.py-shaped module around the committed segments: cuda_src literal, then cpp_src literal."""
+    segments = extractor.parse_header(header)
+    return (
+        'import torch\n\ncuda_src = r"""\n#include <torch/extension.h>\n\n'
+        + segments["affine_helpers"]
+        + "\nstatic const float* optp(const c10::optional<torch::Tensor>& t){ return nullptr; }\n\n"
+        + segments["kernels"]
+        + '\nstd::vector<torch::Tensor> dw_forward(torch::Tensor x){ return {x}; }\n"""\n\n'
+        + 'cpp_src = r"""\nstd::vector<torch::Tensor> dw_forward(torch::Tensor x);\n"""\n'
+    )
+
+
+def test_extractor_creates_a_fresh_output_directory(header, tmp_path):
+    """run_all.sh points the extractor at OUT_DIR/device_code_check, which does not exist on a fresh OUT_DIR."""
+    kernel = tmp_path / "kernel.py"
+    kernel.write_text(_fake_kernel_module(header))
+    fresh = tmp_path / "fresh-out" / "device_code_check"
+    assert not fresh.parent.exists()
+    extractor.main(str(kernel), str(fresh))
+    assert extractor.parse_header((fresh / "gaia_device_code.cuh").read_text()) == extractor.parse_header(header)
+    assert json.loads((fresh / "provenance.json").read_text())["segments_sha256"] == json.loads((PLUGINS / "provenance.json").read_text())["segments_sha256"]

@@ -88,6 +88,7 @@ def main(kernel_path: str, plugins_dir: str) -> None:
     header = render(segs, kernel_sha)
     assert parse_header(header) == segs
     plugins = Path(plugins_dir)
+    plugins.mkdir(parents=True, exist_ok=True)  # run_all.sh points this at a fresh OUT_DIR/device_code_check
     (plugins / "gaia_device_code.cuh").write_text(header)
     provenance = {
         "source": "kernel.py returned by yasp-toolkit kernelgen compile (module_source.py)",

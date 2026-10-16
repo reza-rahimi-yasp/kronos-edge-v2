@@ -5,7 +5,8 @@
 #   ARTIFACT_DIR=<dir with model.pt2 and kernel.py> OUT_DIR=<writable dir> scripts/run_all.sh <stage|all>
 #
 # Stages, in order:
-#   images     build the dev image (official TRT headers) and compile plugins + runner
+#   images     build the dev image (from kronos-edge:rtx5090-cuda130, which must exist; official TRT headers)
+#              and compile plugins + runner; checks the committed device code against ARTIFACT_DIR/kernel.py
 #   extract    weights, invstd, input.bin from model.pt2 (GPU: invstd is computed where kernel.py computes it)
 #   reference  unmodified kernel.py output, default and no-TF32 settings, determinism check
 #   engines    hybrid_{default,notf32}.engine and pure_{default,notf32}.engine

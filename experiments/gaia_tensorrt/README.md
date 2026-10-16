@@ -41,11 +41,21 @@ slower than both pure TensorRT and the Gaia kernel in PyTorch. Nothing under
   `docker/runtime/Dockerfile`: the CUDA base image, the TensorRT runtime
   package, the runner and the plugin library. No Python, no torch, no
   compiler.
-- **Build-time tooling** runs only in `docker/dev/Dockerfile`: the task's
-  diagnostic image plus NVIDIA's official TensorRT 11.4.0.106 C++ headers,
-  the exact build the Python wheels implement.
+- **Build-time tooling** runs only in `docker/dev/Dockerfile`: the check's
+  own environment image (`kronos-edge:rtx5090-cuda130`, from the tracked
+  `docker/rtx5090-cuda130/Dockerfile`) plus, pinned from NVIDIA's apt
+  repository, the CUDA 13.0 compiler, build tools, Python headers, and the
+  official TensorRT 11.4.0.106 C++ headers, the exact build the wheels
+  implement. No experiment script imports anything beyond that image's
+  packages (no `timm`: the model arrives as the exported `model.pt2`).
 
 ## Reproduce
+
+Prerequisites: Docker with the NVIDIA runtime on an RTX 5090 with driver
+580.95.05, the check's environment image built as the root `README.md`
+describes (`docker build -f docker/rtx5090-cuda130/Dockerfile -t
+kronos-edge:rtx5090-cuda130 .`), and a directory holding the `model.pt2` and
+`kernel.py` the check produced. Then:
 
 ```bash
 export ARTIFACT_DIR=/path/with/model.pt2/and/kernel.py OUT_DIR=/some/writable/dir
@@ -81,9 +91,11 @@ timing, through the Python runtime and the C++ runner (identical values):
 | TF32 cleared | 0.99999988 | 1.30e-6 | 3.6e-6 | yes | 5/5 |
 
 The pure TensorRT engine against the same reference: max abs 1.01e-4 (TF32)
-and 1.47e-6 (cleared). The differences are the native convolutions' and
-matmuls' algorithms, not the plugins: the setting without TF32 is within
-single-precision rounding.
+and 1.47e-6 (cleared). The hybrid engine's differences are of the same size
+as the pure engine's in both settings, consistent with the native
+convolutions and matmuls using different algorithms than cuDNN and cuBLAS;
+the plugins' own contribution was not isolated. The setting without TF32 is
+within single-precision rounding.
 
 Latency, medians of 600 samples (3 trials x 200, 20 warm-ups each, reversed
 order on the second trial, no cache flush):
@@ -122,9 +134,10 @@ passes and add layout changes.
 ## Limitations
 
 - One model, one input shape, FP32 only. The plugins reject everything else.
-- The plugins accept only the linear layout. Supporting the channels-last
-  formats TensorRT prefers would remove the transposes; that is an
-  optimization this experiment did not undertake.
+- The plugins accept only the linear layout. Supporting the formats TensorRT
+  chooses for its convolutions could reduce the layout conversions around the
+  plugins; whether and by how much was not measured, and that optimization is
+  outside this experiment.
 - The hybrid network is built from a hand-written schedule of this model's
   `forward`, not derived from the graph; the pure baseline is built from the
   decomposed PT2 graph, not the original eager `model.py`.
