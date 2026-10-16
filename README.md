@@ -474,3 +474,5 @@ See `architecture.md` for how the pieces fit together.
 `src/` or the check's images. `experiments/gaia_tensorrt/README.md` wraps the
 CUDA kernels Gaia generated for one model in TensorRT `IPluginV3` plugins and
 runs the resulting engine from a C++ runner without Python.
+`experiments/gaia_tensorrt/whole_model/README.md` runs that model's whole
+kernel inside one plugin, with cuDNN and cuBLAS driven as PyTorch drives them.
