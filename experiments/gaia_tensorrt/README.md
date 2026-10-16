@@ -131,6 +131,14 @@ PyTorch ran as separate kernels; TensorRT already fuses those into its
 convolutions, so the plugins replace fused native kernels with separate
 passes and add layout changes.
 
+## Whole model in one plugin
+
+`whole_model/README.md` goes one step further: the entire `kernel.py` forward
+inside a single `IPluginV3`, with cuDNN and cuBLAS driven as PyTorch drives
+them. Its engine is bitwise equal to the Gaia kernel's output and matches its
+latency; it reuses this experiment's schedule, device code, extractor, runner
+and validation scripts.
+
 ## Limitations
 
 - One model, one input shape, FP32 only. The plugins reject everything else.

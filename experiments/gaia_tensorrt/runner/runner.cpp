@@ -42,6 +42,13 @@
 
 #include "gaia_plugins.h"
 
+// A second plugin library can be registered by building with
+// -DGAIA_TRT_EXTRA_REGISTER=<its extern "C" bool entry point()>; the
+// whole-model experiment's runner_whole does this (whole_model/Makefile).
+#ifdef GAIA_TRT_EXTRA_REGISTER
+extern "C" bool GAIA_TRT_EXTRA_REGISTER();
+#endif
+
 using namespace nvinfer1;
 
 namespace {
@@ -372,6 +379,9 @@ int main(int argc, char** argv) {
     try {
         Args args = parse(argc, argv);
         if (!gaia_trt_register_plugins()) throw std::runtime_error("plugin registration failed");
+#ifdef GAIA_TRT_EXTRA_REGISTER
+        if (!GAIA_TRT_EXTRA_REGISTER()) throw std::runtime_error("extra plugin registration failed");
+#endif
         Logger logger;
         if (args.command == "run") return cmdRun(args, logger);
         if (args.command == "bench") return cmdBench(args, logger);
