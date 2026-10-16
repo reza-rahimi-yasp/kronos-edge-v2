@@ -98,3 +98,37 @@ def test_extractor_creates_a_fresh_output_directory(header, tmp_path):
     extractor.main(str(kernel), str(fresh))
     assert extractor.parse_header((fresh / "gaia_device_code.cuh").read_text()) == extractor.parse_header(header)
     assert json.loads((fresh / "provenance.json").read_text())["segments_sha256"] == json.loads((PLUGINS / "provenance.json").read_text())["segments_sha256"]
+
+
+HWC_KERNELS = ("dw_kernel_hwc", "epilogue_kernel_hwc", "attn_prep_kernel_hwc", "attn_final_kernel_hwc")
+
+
+@pytest.fixture(scope="module")
+def hwc_header():
+    return (PLUGINS / "gaia_hwc_kernels.cuh").read_text()
+
+
+def test_hwc_kernels_are_labelled_as_written_for_this_experiment(hwc_header):
+    head = "\n".join(hwc_header.splitlines()[:12])
+    assert "written for this experiment" in head and "not Gaia" in head
+    assert "verbatim" not in head.replace("not verbatim", "")
+
+
+@pytest.mark.parametrize("kernel", HWC_KERNELS)
+def test_each_hwc_kernel_is_present_once(hwc_header, kernel):
+    assert len(re.findall(rf"__global__ void (?:__launch_bounds__\(\d+\) )?{kernel}\(", hwc_header)) == 1
+
+
+def test_hwc_kernels_reuse_gaia_arithmetic_helpers_rather_than_redefining_them(hwc_header):
+    assert '#include "gaia_device_code.cuh"' in hwc_header
+    assert "float hsw(" not in hwc_header and "float bnf(" not in hwc_header and "struct Aff" not in hwc_header
+    body = "\n".join(line for line in hwc_header.splitlines() if not line.lstrip().startswith("//"))
+    # the same rounding-controlled intrinsics as the generated code; no plain float operators on the data path
+    for intrinsic in ("__fmaf_rn", "__fadd_rn", "__fdiv_rn", "fmaxf", "hsw(", "bnf("):
+        assert intrinsic in body, intrinsic
+    assert "torch" not in body
+
+
+def test_verbatim_header_is_not_touched_by_the_layout_work(header, provenance):
+    assert "hwc" not in header.lower()
+    assert provenance["kernel_py_sha256"] == "980698e39f89ac6371c3d766e872f688c4645e1a2150499792dbad373527c032"

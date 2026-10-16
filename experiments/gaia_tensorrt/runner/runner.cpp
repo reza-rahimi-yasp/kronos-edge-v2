@@ -371,7 +371,7 @@ int cmdBench(Args const& a, Logger& logger) {
 int main(int argc, char** argv) {
     try {
         Args args = parse(argc, argv);
-        if (!gaia_trt_register_plugins()) throw std::runtime_error("plugin registration failed");
+        if (!gaia_trt_layout_register_plugins()) throw std::runtime_error("plugin registration failed");
         Logger logger;
         if (args.command == "run") return cmdRun(args, logger);
         if (args.command == "bench") return cmdBench(args, logger);

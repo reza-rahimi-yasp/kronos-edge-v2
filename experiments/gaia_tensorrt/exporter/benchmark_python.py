@@ -11,7 +11,10 @@ published latencies for an invalid output cannot look successful. Settings:
   default  torch defaults, *_default.engine (TF32 allowed in TensorRT)
   notf32   matmul/cudnn allow_tf32 False, *_notf32.engine (TF32 flag cleared)
 
-Usage: benchmark_python.py <model.pt2> <kernel.py> <out dir> <plugin .so> <threshold> <default|notf32>
+Usage: benchmark_python.py <model.pt2> <kernel.py> <out dir> <plugin .so> <threshold> <default|notf32> [hybrid prefix]
+The hybrid prefix (default ``hybrid``) names the engine file
+<prefix>_<setting>.engine and the report benchmark_python_<prefix>_<setting>.json
+(benchmark_python_<setting>.json for the default prefix).
 """
 
 import hashlib
@@ -30,7 +33,7 @@ from kronos_edge.benchmark_check import RUNS, WARMUP, EngineRunner, cosine, flat
 TRIALS = 3
 
 
-def main(pt2_path: str, kernel_path: str, out_dir: str, plugin_lib: str, threshold: float, setting: str) -> None:
+def main(pt2_path: str, kernel_path: str, out_dir: str, plugin_lib: str, threshold: float, setting: str, hybrid: str = "hybrid") -> None:
     out = Path(out_dir)
     if setting == "notf32":
         torch.backends.cuda.matmul.allow_tf32 = False
@@ -52,7 +55,7 @@ def main(pt2_path: str, kernel_path: str, out_dir: str, plugin_lib: str, thresho
     gaia_args = [t.clone() for t in flat] + [x.clone()]
     trt_build.load_plugins(plugin_lib)
     runners = {
-        "hybrid_trt": EngineRunner({"engine": (out / f"hybrid_{setting}.engine").read_bytes(), "user_inputs": (x.clone(),), "device": "cuda"}),
+        "hybrid_trt": EngineRunner({"engine": (out / f"{hybrid}_{setting}.engine").read_bytes(), "user_inputs": (x.clone(),), "device": "cuda"}),
         "pure_trt": EngineRunner({"engine": (out / f"pure_{setting}.engine").read_bytes(), "user_inputs": (x.clone(),), "device": "cuda"}),
     }
     fns = {"gaia_optimized": lambda: candidate(*gaia_args), "hybrid_trt": runners["hybrid_trt"].run, "pure_trt": runners["pure_trt"].run}
@@ -78,12 +81,12 @@ def main(pt2_path: str, kernel_path: str, out_dir: str, plugin_lib: str, thresho
         "protocol": {"timer": "kronos_edge.benchmark_check.timed (unmodified)", "warmup": WARMUP, "runs_per_trial": RUNS, "trials": TRIALS,
                      "cache_flush": False, "stream": "torch default stream", "grad": "no_grad"},
         "subjects": {"gaia_optimized": "unmodified kernel.py Model on the PT2 parameters/buffers/example input",
-                     "hybrid_trt": f"hybrid_{setting}.engine via kronos_edge EngineRunner", "pure_trt": f"pure_{setting}.engine via kronos_edge EngineRunner"},
+                     "hybrid_trt": f"{hybrid}_{setting}.engine via kronos_edge EngineRunner", "pure_trt": f"pure_{setting}.engine via kronos_edge EngineRunner"},
         "sha256": {"kernel.py": hashlib.sha256(Path(kernel_path).read_bytes()).hexdigest(), "model.pt2": hashlib.sha256(Path(pt2_path).read_bytes()).hexdigest(),
-                   **{f"{n}_{setting}.engine": hashlib.sha256((out / f"{n}_{setting}.engine").read_bytes()).hexdigest() for n in ("hybrid", "pure")}},
+                   **{f"{n}_{setting}.engine": hashlib.sha256((out / f"{n}_{setting}.engine").read_bytes()).hexdigest() for n in (hybrid, "pure")}},
         "checks_before": {}, "trials": [], "checks_after": {},
     }
-    report_path = out / f"benchmark_python_{setting}.json"
+    report_path = out / (f"benchmark_python_{setting}.json" if hybrid == "hybrid" else f"benchmark_python_{hybrid}_{setting}.json")
     with torch.no_grad():
         for name in fns:
             result["checks_before"][name] = check(name)
@@ -108,4 +111,4 @@ def main(pt2_path: str, kernel_path: str, out_dir: str, plugin_lib: str, thresho
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], float(sys.argv[5]), sys.argv[6])
+    main(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], float(sys.argv[5]), sys.argv[6], *sys.argv[7:8])
