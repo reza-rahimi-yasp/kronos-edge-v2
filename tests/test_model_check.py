@@ -26,6 +26,9 @@ BENCHMARK = {
 }
 from kronos_edge.workflow import run_check
 
+# The credentials the README and .env.example have the user export: the API key, its deprecated alias, the registry key.
+CREDENTIALS = ("YASP_API_KEY", "YASP_API_TOKEN", "REGISTRY_KEY")
+
 TYPO_MODEL = GOOD_MODEL.replace("return self.conv(x)", "return self.convv(x)")
 
 NOISY_MODEL = GOOD_MODEL.replace(
@@ -337,6 +340,42 @@ def test_the_real_subprocess_runs_the_eager_check_and_writes_the_report(tmp_path
     assert report.error in (None, "tensorrt_import", "benchmark_runtime")  # this environment may lack TensorRT
     assert "model.onnx" in {f.name for f in artifacts.iterdir()}  # the child ran this package's nodes
     assert capsys.readouterr().out == ""  # nothing of the child's stdout is routed through the workflow
+
+
+def test_the_real_subprocess_hands_the_model_no_yasp_credentials(tmp_path, good_model, artifacts, monkeypatch, capsys):
+    """The user's model runs in the child: the Yasp API key, its alias, and the registry key the README has the user
+    export must not reach it, nor the OS keyring through Python's keyring package. The report still comes back."""
+    _, npz = good_model
+    for name in CREDENTIALS:
+        monkeypatch.setenv(name, "fake-secret-sentinel")
+    seen = tmp_path / "seen.json"
+    model = tmp_path / "model.py"
+    model.write_text(GOOD_MODEL.replace(
+        "import torch\n",
+        "import json\nimport os\nimport torch\n\n"
+        f"open({str(seen)!r}, 'w').write(json.dumps({{k: os.environ.get(k) for k in {[*CREDENTIALS, 'PYTHON_KEYRING_BACKEND']!r}}}))\n",
+        1,
+    ))
+
+    code = REAL_RUN_PROCESS(model, npz, tmp_path, artifacts, "fp32", 0.99, "cpu", "ERROR")
+
+    assert json.loads(seen.read_text()) == {**dict.fromkeys(CREDENTIALS), "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring"}
+    report = model_check.Report.model_validate_json((tmp_path / model_check.REPORT_FILE).read_text())
+    assert code == (0 if report.error is None else 1)
+    assert "fake-secret-sentinel" not in report.error_detail
+    assert capsys.readouterr().out == ""
+
+
+def test_the_subprocess_environment_drops_only_the_yasp_credentials(monkeypatch):
+    for name in CREDENTIALS:
+        monkeypatch.setenv(name, "fake-secret-sentinel")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+
+    env = model_check.process_environment()
+
+    assert not set(CREDENTIALS) & set(env)
+    assert "fake-secret-sentinel" not in env.values()
+    assert env["CUDA_VISIBLE_DEVICES"] == "0" and env["PATH"] == os.environ["PATH"]
 
 
 # Captured at import, before the autouse fixture replaces it.

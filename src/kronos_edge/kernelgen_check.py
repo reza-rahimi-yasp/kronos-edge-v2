@@ -29,6 +29,10 @@ documented starting workflow
   passed its worker's checks against the reference; the check reads no field of
   the report itself, since the docs publish no schema for it.
 
+The export imports the user's ``model.py`` in the toolkit's process, so it runs
+without the Yasp credentials and with the keyring disabled: it needs no key.
+The service commands keep the environment they authenticate with.
+
 The toolkit can exit 0 after an error that stops its flow early, so the node
 requires the files it asked for instead of trusting the exit code. The host
 never imports yasp-agent: the toolkit is a subprocess, so this module stays free
@@ -49,18 +53,37 @@ logger = get_logger(__name__)
 
 TOOLKIT = "yasp-toolkit"
 
+# What the toolkit authenticates with: YASP_API_KEY (and its deprecated alias YASP_API_TOKEN), and the
+# REGISTRY_KEY minted from it for the install. A process that runs the user's model gets none of them, and
+# Python's keyring package, the key's other documented home, answers nothing there.
+CREDENTIAL_PREFIX = "YASP_"
+CREDENTIALS = frozenset({"REGISTRY_KEY"})
+NO_KEYRING = {"PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring"}
+# The toolkit commands that import and run the user's model.py.
+MODEL_COMMANDS = (["kernelgen", "export"],)
+
 
 class ToolkitFailed(RuntimeError):
     """The toolkit exited with an error, or returned without the file it was asked for; the message is its output."""
 
 
+def without_credentials(env: dict[str, str]) -> dict[str, str]:
+    """``env`` without the Yasp credentials and with the keyring disabled, for a process that runs the user's model."""
+    kept = {k: v for k, v in env.items() if not k.startswith(CREDENTIAL_PREFIX) and k not in CREDENTIALS}
+    return {**kept, **NO_KEYRING}
+
+
 def run_toolkit(args: list[str], timeout: float | None = None) -> subprocess.CompletedProcess:
-    """Run yasp-toolkit with ``args``, capturing its output; a missing command raises FileNotFoundError."""
+    """Run yasp-toolkit with ``args``, capturing its output; a missing command raises FileNotFoundError.
+
+    A command that runs the user's model gets no credentials; the service commands get this environment.
+    """
     # COLUMNS: the toolkit renders wide tables, which wrap at the 80 columns it assumes without a terminal
     # (https://compile.yasp.ai/help/install/#optional-widen-table-output).
-    return subprocess.run(
-        [TOOLKIT, *args], capture_output=True, text=True, env={**os.environ, "COLUMNS": "200"}, timeout=timeout,
-    )
+    env = {**os.environ, "COLUMNS": "200"}
+    if args[:2] in MODEL_COMMANDS:
+        env = without_credentials(env)
+    return subprocess.run([TOOLKIT, *args], capture_output=True, text=True, env=env, timeout=timeout)
 
 
 def run_logged(stage: str, args: list[str], timeout: float | None = None) -> tuple[subprocess.CompletedProcess, str]:

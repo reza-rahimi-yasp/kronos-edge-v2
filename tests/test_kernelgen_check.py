@@ -6,7 +6,9 @@ replaced by an autouse fixture; the tests here cover the nodes around it, the re
 helper against a missing command, and the config setting that pins the evaluator.
 """
 
+import json
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -251,6 +253,64 @@ def test_real_run_toolkit_kills_a_command_that_outlives_its_timeout(tmp_path, mo
         REAL_RUN_TOOLKIT(["eval", "workers"], timeout=0.2)
 
     assert time.monotonic() - started < 5  # killed at the timeout, not awaited
+
+
+CREDENTIALS = ("YASP_API_KEY", "YASP_API_TOKEN", "REGISTRY_KEY")
+
+
+def test_the_real_export_hands_the_model_no_yasp_credentials(tmp_path, monkeypatch):
+    """`kernelgen export` imports the user's model.py in the toolkit's process, so the real helper runs it without the
+    Yasp credentials and with the keyring disabled; the export itself needs no key."""
+    for name in CREDENTIALS:
+        monkeypatch.setenv(name, "fake-secret-sentinel")
+    script = tmp_path / "fake-toolkit"
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import runpy, sys\n"
+        "args = sys.argv[1:]\n"
+        "runpy.run_path(args[args.index('--input') + 1])\n"
+        "open(args[args.index('--output') + 1], 'wb').write(b'reference')\n"
+    )
+    script.chmod(0o755)
+    monkeypatch.setattr(kernelgen_check, "TOOLKIT", str(script))
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", REAL_RUN_TOOLKIT)
+    seen = tmp_path / "seen.json"
+    model = tmp_path / "model.py"
+    model.write_text(
+        "import json, os\n"
+        f"open({str(seen)!r}, 'w').write(json.dumps({{k: os.environ.get(k) for k in {[*CREDENTIALS, 'PYTHON_KEYRING_BACKEND']!r}}}))\n"
+    )
+    artifacts_dir = tmp_path / ".artifact"
+    artifacts_dir.mkdir()
+
+    state = kernelgen_check.export_reference({"artifacts_path": str(artifacts_dir), "model_path": str(model)})
+
+    assert state == {}
+    assert (artifacts_dir / "model.pt2").read_bytes() == b"reference"
+    assert json.loads(seen.read_text()) == {**dict.fromkeys(CREDENTIALS), "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring"}
+
+
+@pytest.mark.parametrize(
+    "args, authenticated",
+    [
+        (["kernelgen", "export", "--input", "model.py"], False),
+        (["eval", "workers", "--tag", "routing=r"], True),
+        (["kernelgen", "compile", "--reference", "model.pt2"], True),
+        (["eval", "inspect", "--file", "kernelgen_report.json"], True),
+    ],
+)
+def test_only_the_service_commands_get_the_yasp_credentials(tmp_path, monkeypatch, args, authenticated):
+    for name in CREDENTIALS:
+        monkeypatch.setenv(name, f"fake-{name}")
+    script = tmp_path / "fake-toolkit"
+    script.write_text("#!/bin/sh\nenv\n")
+    script.chmod(0o755)
+    monkeypatch.setattr(kernelgen_check, "TOOLKIT", str(script))
+
+    env = dict(line.split("=", 1) for line in REAL_RUN_TOOLKIT(args).stdout.splitlines() if "=" in line)
+
+    assert {k: env.get(k) for k in CREDENTIALS} == {k: f"fake-{k}" if authenticated else None for k in CREDENTIALS}
+    assert env["COLUMNS"] == "200"
 
 
 def test_kernelgen_is_skipped_when_the_model_check_fails(tmp_path, monkeypatch, env_files):

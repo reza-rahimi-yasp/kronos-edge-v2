@@ -5,7 +5,8 @@ nothing the user's model prints on stdout can touch the protocol; its stdout
 and stderr are inherited. The files the checks produce for the user go to the
 artifact directory. The child is this interpreter with this package's source
 directory leading ``PYTHONPATH``, so it runs the same code from any working
-directory; it is the environment the preflight verified.
+directory; it is the environment the preflight verified, less the Yasp
+credentials, which the user's model never sees.
 """
 
 import os
@@ -18,6 +19,7 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field
 
 from kronos_edge import artifacts as artifact_files
+from kronos_edge.kernelgen_check import without_credentials
 from kronos_edge.log import get_logger
 from kronos_edge.messages import BENCHMARK, EAGER, MODEL_CHECK as CUSTOMER_MESSAGES, ONNX, ONNXSIM, TENSORRT
 from kronos_edge.state import State, fail
@@ -57,8 +59,8 @@ class Report(BaseModel):
 
 
 def process_environment() -> dict[str, str]:
-    """This process's environment with the package's source directory first on PYTHONPATH."""
-    env = dict(os.environ)
+    """This process's environment without the Yasp credentials, with the package's source directory first on PYTHONPATH."""
+    env = without_credentials(dict(os.environ))
     inherited = env.get("PYTHONPATH")
     env["PYTHONPATH"] = os.pathsep.join([str(SOURCE_DIR), inherited]) if inherited else str(SOURCE_DIR)
     return env
