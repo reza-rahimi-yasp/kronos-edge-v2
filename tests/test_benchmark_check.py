@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 import torch
 
-from conftest import CONFIG, FakeEngineRunner, write_yaml
+from conftest import CONFIG, FakeEngineRunner, run_directory, write_yaml
 from kronos_edge import benchmark_check, eager_check
 from kronos_edge.workflow import run_check
 from test_eager_check import CONV_RELU, TWO_INPUTS, X, XY, error_records, write_model, write_npz
@@ -139,7 +139,7 @@ def test_success_reports_the_distribution_and_the_metric(tmp_path, env_files):
     assert bench["speedup"] == pytest.approx(bench["eager_ms"]["median"] / bench["tensorrt_ms"]["median"])
     assert bench["metric"] == "cosine" and bench["threshold"] == 0.99
     assert bench["values"] == [pytest.approx(1.0)]
-    on_disk = json.loads((tmp_path / ".artifact" / "benchmark.json").read_text())
+    on_disk = json.loads((run_directory(tmp_path / ".artifact") / "benchmark.json").read_text())
     assert on_disk == bench
     message = state["customer_message"]
     assert "benchmark succeeded" in message
@@ -167,7 +167,7 @@ def test_output_below_threshold_is_the_accuracy_stage(tmp_path, caplog, monkeypa
     assert state["error"] == "accuracy"
     assert "output 1" in state["customer_message"] and "0.999" in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == ["accuracy"]
-    assert not (tmp_path / ".artifact" / "benchmark.json").exists()
+    assert not (run_directory(tmp_path / ".artifact") / "benchmark.json").exists()
 
 
 def test_threshold_from_config_decides(tmp_path, monkeypatch, env_files):

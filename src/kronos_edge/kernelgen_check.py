@@ -10,7 +10,7 @@ documented starting workflow
 
 - ``yasp-toolkit kernelgen export`` on the user's ``model.py``
   (https://compile.yasp.ai/help/reference/kernelgen/#export) writes
-  ``model.pt2`` to the artifact directory. The exporter builds
+  ``model.pt2`` to the run directory. The exporter builds
   ``Model(*get_init_inputs())``, calls ``get_inputs()``, and traces with
   ``torch.export`` in its own environment, however the toolkit's torch is set
   up: nothing here forces the CPU or the GPU. It never sees the benchmarked
@@ -21,7 +21,7 @@ documented starting workflow
   the user's Gaia worker (https://compile.yasp.ai/help/reference/kernelgen/#compile).
   The reference alone is uploaded: no ``--source``, so no user Python runs on the
   service's side. The command polls the job until it is terminal; the kernel lands
-  in the artifact directory as ``kernel.py`` next to the job's
+  in the run directory as ``kernel.py`` next to the job's
   ``kernelgen_report.json``.
 - ``yasp-toolkit eval inspect --file kernelgen_report.json``
   (https://compile.yasp.ai/help/reference/eval/#inspect) renders that report,
@@ -101,7 +101,7 @@ def run_logged(stage: str, args: list[str], timeout: float | None = None) -> tup
 def export_reference(state: State) -> State:
     stage = "export_reference"
     try:
-        artifacts = Path(state["artifacts_path"]).resolve()
+        artifacts = Path(state["run_path"]).resolve()
         reference = artifacts / PT2_FILE
         args = ["kernelgen", "export", "--input", str(Path(state["model_path"]).resolve()), "--output", str(reference)]
         logger.info("exporting the kernelgen reference from %s", state["model_path"], extra={"stage": stage})
@@ -121,7 +121,7 @@ def export_reference(state: State) -> State:
 def kernelgen(state: State) -> State:
     stage = "kernelgen_reference"
     try:
-        artifacts = Path(state["artifacts_path"]).resolve()
+        artifacts = Path(state["run_path"]).resolve()
         reference = artifacts / PT2_FILE
         if not reference.is_file():
             raise FileNotFoundError(f"{reference} was not written by the export")

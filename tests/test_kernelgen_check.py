@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import CONFIG, FAKE_INSPECT, FAKE_REFERENCE, FAKE_TASK_LINE, fake_toolkit, write_yaml
+from conftest import CONFIG, FAKE_INSPECT, FAKE_REFERENCE, FAKE_TASK_LINE, fake_toolkit, run_directory, write_yaml
 from kronos_edge import artifacts, kernelgen_check
 from kronos_edge.workflow import run_check
 from test_eager_check import CONV_RELU, TYPO, X, error_records, run, write_model, write_npz
@@ -26,7 +26,7 @@ def recording_toolkit(calls, tmp_path):
     """The stub, plus a record of each command and of what the artifact directory held when it ran."""
 
     def record(args, timeout=None):
-        calls.append((args, sorted(f.name for f in (tmp_path / ".artifact").iterdir())))
+        calls.append((args, sorted(f.name for f in run_directory(tmp_path / ".artifact").iterdir())))
         return fake_toolkit(args)
 
     return record
@@ -60,7 +60,7 @@ def test_kernelgen_runs_after_the_export_and_its_report_is_inspected(tmp_path, m
     # kernelgen starts only once the export has written the reference and the model check the TensorRT engine.
     assert {"model.pt2", "model.engine", "model.onnx", "model_simplified.onnx"} <= set(seen_before_compile)
     assert "kernel.py" not in seen_before_compile
-    art = tmp_path / ".artifact"
+    art = run_directory(tmp_path / ".artifact")
     assert option(compile_args, "--reference") == str(art / "model.pt2")
     assert option(compile_args, "--gpu-name") == CONFIG["gpu"]
     assert option(compile_args, "--output") == str(art / "kernel.py")
@@ -72,6 +72,7 @@ def test_kernelgen_runs_after_the_export_and_its_report_is_inspected(tmp_path, m
     assert inspect_args == ["eval", "inspect", "--file", str(art / "kernelgen_report.json")]
     assert {"kernel.py", "kernelgen_report.json"} <= set(seen_before_inspect)
     assert state["kernel_path"] == str(art / "kernel.py")
+    assert f"the kernel is {art / 'kernel.py'}." in state["customer_message"]
 
 
 def test_success_shows_the_inspected_report(tmp_path, caplog, env_files, good_model, capsys):
@@ -81,7 +82,7 @@ def test_success_shows_the_inspected_report(tmp_path, caplog, env_files, good_mo
     assert state["kernelgen_report"] == FAKE_INSPECT.strip()
     assert "kernel.py" in state["customer_message"]
     assert FAKE_INSPECT.strip() in state["customer_message"]
-    assert sorted(f.name for f in (tmp_path / ".artifact").iterdir()) == [
+    assert sorted(f.name for f in run_directory(tmp_path / ".artifact").iterdir()) == [
         "benchmark.json", "kernel.py", "kernelgen_report.json",
         "model.engine", "model.onnx", "model.pt2", "model_simplified.onnx",
     ]
@@ -212,7 +213,7 @@ def test_an_inspection_failure_is_a_stage_and_keeps_the_kernel(tmp_path, caplog,
     assert state["error"] == "kernelgen_inspect"
     assert stderr.strip() in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == ["kernelgen_inspect"]
-    art = tmp_path / ".artifact"
+    art = run_directory(tmp_path / ".artifact")
     assert (art / "kernel.py").is_file() and (art / "kernelgen_report.json").is_file()
 
 
@@ -283,7 +284,7 @@ def test_the_real_export_hands_the_model_no_yasp_credentials(tmp_path, monkeypat
     artifacts_dir = tmp_path / ".artifact"
     artifacts_dir.mkdir()
 
-    state = kernelgen_check.export_reference({"artifacts_path": str(artifacts_dir), "model_path": str(model)})
+    state = kernelgen_check.export_reference({"run_path": str(artifacts_dir), "model_path": str(model)})
 
     assert state == {}
     assert (artifacts_dir / "model.pt2").read_bytes() == b"reference"
@@ -339,7 +340,7 @@ def test_kernelgen_requires_the_reference_and_the_tensorrt_output(tmp_path, capl
     for name in produced:
         (art / name).write_bytes(b"x")
 
-    update = kernelgen_check.kernelgen({"artifacts_path": str(art), "config": None})
+    update = kernelgen_check.kernelgen({"run_path": str(art), "config": None})
 
     assert update["error"] == stage
     assert missing in update["error_detail"]
@@ -358,7 +359,7 @@ def test_export_runs_after_the_model_check_on_the_users_model(tmp_path, monkeypa
 
     assert state["outcome"] == "success"
     export_args, present = calls[0]
-    art = tmp_path / ".artifact"
+    art = run_directory(tmp_path / ".artifact")
     assert export_args == ["kernelgen", "export", "--input", str(good_model[0].resolve()), "--output", str(art / "model.pt2")]
     assert {"model.engine", "benchmark.json"} <= set(present)  # the model check ran first
     assert "model.pt2" not in present

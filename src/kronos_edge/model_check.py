@@ -2,8 +2,9 @@
 
 The subprocess writes its report to a file in a temporary directory, so
 nothing the user's model prints on stdout can touch the protocol; its stdout
-and stderr are inherited. The files the checks produce for the user go to the
-artifact directory. The child is this interpreter with this package's source
+and stderr are inherited. The files the checks produce for the user go to a
+new run directory under the artifact root, which later nodes find in
+``run_path``. The child is this interpreter with this package's source
 directory leading ``PYTHONPATH``, so it runs the same code from any working
 directory; it is the environment the preflight verified, less the Yasp
 credentials, which the user's model never sees.
@@ -105,9 +106,7 @@ def _read_report(report_dir, code: int) -> Report:
 def run_model_check(state: State) -> State:
     stage = "model_check_run"
     try:
-        artifacts = Path(state["artifacts_path"])
-        artifacts.mkdir(parents=True, exist_ok=True)
-        artifact_files.clear(artifacts)
+        artifacts = artifact_files.create_run_directory(state["artifacts_path"])
         config = state["config"]
         logger.info(
             "running the model checks in a subprocess on %s at %s, artifacts in %s", DEVICE, config.precision, artifacts,
@@ -123,5 +122,5 @@ def run_model_check(state: State) -> State:
         return fail(logger, stage, exc)
     if report.error is not None:
         logger.info("the model check reported failure at stage %s", report.error, extra={"stage": stage})
-        return {"error": report.error, "error_detail": report.error_detail}
-    return {"benchmark": report.benchmark.model_dump()}
+        return {"run_path": str(artifacts), "error": report.error, "error_detail": report.error_detail}
+    return {"run_path": str(artifacts), "benchmark": report.benchmark.model_dump()}

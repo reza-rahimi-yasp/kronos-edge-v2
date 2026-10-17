@@ -30,7 +30,7 @@ class Config(EnvironmentConfig):
     """The user's config.yaml: the environment fields plus the check settings.
 
     Settings are not part of environment matching; changing one re-runs the
-    checks in the same environment and overwrites the artifacts.
+    checks in the same environment into a new run directory.
     """
 
     precision: Literal["fp32", "fp16"]

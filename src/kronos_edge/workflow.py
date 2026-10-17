@@ -95,7 +95,7 @@ def main(argv=None) -> int:
     parser.add_argument("model_path")
     parser.add_argument("npz_path")
     parser.add_argument("--environments", default=DEFAULT_ENVIRONMENTS, help="registry of supported environments")
-    parser.add_argument("--artifacts", default=DEFAULT_ARTIFACTS, help="directory for the files the checks produce")
+    parser.add_argument("--artifacts", default=DEFAULT_ARTIFACTS, help="root directory; each run writes to a new UTC-timestamped directory in it")
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args(argv)
     configure(args.log_level)
