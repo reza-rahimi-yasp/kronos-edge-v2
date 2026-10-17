@@ -44,8 +44,15 @@ decisions: do not add file listings, commands, or summaries here.
 - Every `yasp-toolkit` command (`kernelgen export`, `eval workers`,
   `kernelgen compile`, `eval inspect`) is a subprocess with its output
   captured, after the model check. The toolkit needs the user's Yasp API key,
-  which only it reads. The `kernelgen` node requires the export's `model.pt2`
-  and the model check's `model.engine` before it starts. The toolkit can exit
+  which only it reads. The processes that run the user's model, the
+  model-check subprocess and `kernelgen export`, get this environment
+  without `YASP_*` and `REGISTRY_KEY` and with Python's keyring set to its
+  null backend; the export needs no key. The service commands (`eval
+  workers`, `kernelgen compile`, `eval inspect`) keep the full environment
+  they authenticate with. This withholds the credentials, it is not a
+  sandbox: the model still runs as the user. The `kernelgen` node requires
+  the export's `model.pt2` and the model check's `model.engine` before it
+  starts. The toolkit can exit
   0 after an early error, so a node trusts the files it asked for, not the
   exit code.
 - The kernelgen reference is produced by the documented `yasp-toolkit

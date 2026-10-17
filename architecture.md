@@ -85,8 +85,9 @@ Every node either advances the state or records a failure stage in
 - `run_model_check` (`model_check.py`): creates the artifact directory,
   deletes the managed files listed in `artifacts.py` from a previous run, runs
   the model-check graph as `python -m kronos_edge.eager_check` with this
-  interpreter, the package's source directory leading `PYTHONPATH`, stdout
-  and stderr inherited, and the paths, precision, threshold, `--device cuda`,
+  interpreter, the package's source directory leading `PYTHONPATH`, the Yasp
+  credentials (`YASP_*`, `REGISTRY_KEY`) removed from its environment and
+  Python's keyring disabled, stdout and stderr inherited, and the paths, precision, threshold, `--device cuda`,
   and log level on the command line, then validates `report.json` from a
   temporary directory and requires the exit code to agree with it. Stage:
   `model_check_run`; a failure reported by the subprocess is passed through
@@ -94,7 +95,9 @@ Every node either advances the state or records a failure stage in
 - `export_reference` (`kernelgen_check.py`): runs `yasp-toolkit kernelgen
   export --input model.py --output <artifacts>/model.pt2`
   (https://compile.yasp.ai/help/reference/kernelgen/#export) as a subprocess
-  with its output captured, since the user's model prints on it. The exporter
+  with its output captured, since the user's model prints on it, and without
+  the Yasp credentials or the keyring, since it runs the user's model; the
+  other toolkit commands keep them. The exporter
   builds `Model(*get_init_inputs())`, calls `get_inputs()`, and saves the
   `torch.export` program with the toolkit's own torch, on whatever device that
   torch and the model choose; it never sees the benchmarked instance or

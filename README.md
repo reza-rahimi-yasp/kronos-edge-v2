@@ -100,6 +100,13 @@ yasp-toolkit keyring set      # or: keep it in the keyring instead
 `.env.example` documents the variable. Nothing in the check reads a `.env`
 file: if you keep the key in one, load it yourself (`set -a; . ./.env; set +a`)
 and never commit it. `.env` is gitignored. Only `yasp-toolkit` reads the key.
+Your model never sees it: the model check and `yasp-toolkit kernelgen export`,
+the steps that run `model.py`, start without `YASP_API_KEY`, any other `YASP_`
+variable, or `REGISTRY_KEY` in their environment, and with Python's `keyring`
+package set to its null backend; the export needs no key. The worker listing,
+the generation, and the report inspection keep your environment and
+authenticate as usual. This withholds the key from your model's environment;
+it is not a sandbox, since your model still runs as you.
 
 ## Deploy the Gaia worker
 
