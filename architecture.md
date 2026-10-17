@@ -1,34 +1,38 @@
 # Architecture
 
-The check is two LangGraph state machines. The host graph validates the
-user's config and environment, then starts the matched environment's Docker
-container with the GPU attached and runs the container graph inside it. The
-container graph writes `report.json` to a directory the host mounted; the host
-merges it into its own state, so `failure` picks the customer message the
-same way for both graphs. Once the container has succeeded, the host runs the
-documented `yasp-toolkit kernelgen export` in a second container from the
-export image (CPU-only torch and `yasp-agent`, no GPU, no key) to write the
-kernelgen reference, confirms with `yasp-toolkit eval workers` that the user's
-persistent Gaia worker for the config's GPU and routing key is registered, and
-runs `yasp-toolkit kernelgen compile` and `yasp-toolkit eval inspect` on the
-host. Every Yasp interface used is a command documented at
-https://compile.yasp.ai/help/; the repository orchestrates Gaia and implements
-none of it. The user's Yasp API key stays on the host; no container the check
-runs receives a key, and the check never starts, stops, or removes a Gaia
-worker. The files the checks produce for the user go to the artifact
-directory, which the host creates and mounts into both containers; the
-export's `model.pt2` and the container's `model.engine` in it are what the
-host's `kernelgen` node depends on.
+The check is two LangGraph state machines in one local workflow. The
+workflow graph validates the user's config, matches it to a registry entry,
+and verifies with a preflight that the Python environment it was started in,
+native or a container built from the entry's Dockerfile, is that entry and has
+`yasp-toolkit` on the path. It then runs the model-check graph as a
+subprocess of the same interpreter; that graph writes `report.json` to a
+temporary directory and the workflow merges it into its own state, so
+`failure` picks the customer message the same way for both graphs. Once the
+model check has succeeded, the workflow runs the documented `yasp-toolkit
+kernelgen export` on the user's `model.py` to write the kernelgen reference,
+confirms with `yasp-toolkit eval workers` that the user's persistent Gaia
+worker for the config's GPU and routing key is registered, and runs
+`yasp-toolkit kernelgen compile` and `yasp-toolkit eval inspect`. Every Yasp
+interface used is a command documented at https://compile.yasp.ai/help/,
+run as a subprocess with its output captured; the repository orchestrates
+Gaia and implements none of it. The workflow process never imports the model
+stack: torch, TensorRT, and the user's model live in the subprocesses. The
+check never starts, stops, or removes a Gaia worker, never runs `docker`, and
+mints no key. The files the checks produce for the user go to the artifact
+directory; the export's `model.pt2` and the model check's `model.engine` in it
+are what the `kernelgen` node depends on.
 
 ```mermaid
 stateDiagram-v2
     [*] --> load_config
     load_config --> match_environment : ok
     load_config --> failure : error
-    match_environment --> run_in_container : ok
+    match_environment --> preflight : ok
     match_environment --> failure : error
-    run_in_container --> export_reference : ok (model.engine)
-    run_in_container --> failure : error
+    preflight --> run_model_check : ok (this environment is the entry)
+    preflight --> failure : error
+    run_model_check --> export_reference : ok (model.engine)
+    run_model_check --> failure : error
     export_reference --> verify_evaluator : ok (model.pt2)
     export_reference --> failure : error
     verify_evaluator --> kernelgen : ok (worker registered)
@@ -38,7 +42,7 @@ stateDiagram-v2
     success --> [*]
     failure --> [*]
 
-    state "run_in_container (docker run, container graph)" as run_in_container {
+    state "run_model_check (python -m kronos_edge.eager_check, model-check graph)" as run_model_check {
         [*] --> load_model
         load_model --> validate_inputs : ok
         load_model --> report : error
@@ -60,40 +64,45 @@ stateDiagram-v2
 Every node either advances the state or records a failure stage in
 `error` and `error_detail`; `route_on_error` sends any failure to `failure`.
 
-## Host graph
+## Workflow graph
 
 - `load_config` (`env_check.py`): reads and validates the user's `config.yaml`
   against the Pydantic schema in `config.py`: the five environment fields plus
   the `precision`, `metric`, `threshold`, and `eval_routing` settings, all
-  required, and the optional `dependencies` list. Stages: `read_config`,
-  `validate_config`.
-- `match_environment` (`env_check.py`): loads `environments.yaml`, finds the
-  entry equal to the config on the five environment fields, and checks the host GPU via
-  `nvidia-smi`, the entry's image and the export image (`kronos-edge:gaia-export`)
-  via `docker image inspect`. Stages: `load_environments`, `match_environment`,
-  `host_gpu`, `image_available`, `export_image_available`.
-- `run_in_container` (`container.py`): creates the artifact directory,
+  required, nothing else. Stages: `read_config`, `validate_config`.
+- `match_environment` (`env_check.py`): loads `environments.yaml` and finds
+  the entry equal to the config on the five environment fields. Stages:
+  `load_environments`, `match_environment`.
+- `preflight` (`preflight.py`): runs the probe `python -m
+  kronos_edge.preflight` as a subprocess of this interpreter; it prints
+  torch's version and CUDA build, TensorRT's version, and the GPU torch sees
+  as JSON. The node compares them with the entry by version component
+  (`11.4.0` accepts `11.4.0.106`, `2.14.1` accepts `2.14.1+cu130`; the GPU
+  name must be equal; the driver is not checked), lists every difference at
+  once with the entry's Dockerfile as the recipe, and requires `yasp-toolkit`
+  on the path. Stages: `preflight_probe`, `environment_mismatch`,
+  `kernelgen_toolkit`.
+- `run_model_check` (`model_check.py`): creates the artifact directory,
   deletes the managed files listed in `artifacts.py` from a previous run, runs
-  the container graph with `docker run --gpus all`, `model.py` and
-  `input.npz` mounted read-only, the report and artifact directories mounted
-  writable, and the precision and each of the config's `dependencies`
-  (`--dependency`) passed on the command line, then validates `report.json` and requires the exit code
-  to agree with it. Stage: `container_run`; a
-  failure reported by the container is passed through under its own stage.
-- `export_reference` (`container.py`): runs the export image with
-  `docker run`, `model.py` mounted read-only and the artifact directory
-  writable, no GPU and no environment from the host, so no key. A short `sh`
-  script installs the config's `dependencies` (passed as its arguments) under a
-  constraints file of the image, exiting with a dedicated code if pip fails,
-  then runs `yasp-toolkit kernelgen export --input /work/model.py --output
-  /work/artifact/model.pt2`
-  (https://compile.yasp.ai/help/reference/kernelgen/#export). The exporter
+  the model-check graph as `python -m kronos_edge.eager_check` with this
+  interpreter, the package's source directory leading `PYTHONPATH`, the Yasp
+  credentials (`YASP_*`, `REGISTRY_KEY`) removed from its environment and
+  Python's keyring disabled, stdout and stderr inherited, and the paths, precision, threshold, `--device cuda`,
+  and log level on the command line, then validates `report.json` from a
+  temporary directory and requires the exit code to agree with it. Stage:
+  `model_check_run`; a failure reported by the subprocess is passed through
+  under its own stage.
+- `export_reference` (`kernelgen_check.py`): runs `yasp-toolkit kernelgen
+  export --input model.py --output <artifacts>/model.pt2`
+  (https://compile.yasp.ai/help/reference/kernelgen/#export) as a subprocess
+  with its output captured, since the user's model prints on it, and without
+  the Yasp credentials or the keyring, since it runs the user's model; the
+  other toolkit commands keep them. The exporter
   builds `Model(*get_init_inputs())`, calls `get_inputs()`, and saves the
-  `torch.export` program; it never sees the benchmarked instance or
-  `input.npz`. The image's torch is CPU-only, so the reference is traced on the
-  CPU. Output is captured (the user's model prints on it) and becomes the
-  detail on failure; the node requires `model.pt2` afterwards. Stages:
-  `export_run`, `export_dependencies`, `export_reference`.
+  `torch.export` program with the toolkit's own torch, on whatever device that
+  torch and the model choose; it never sees the benchmarked instance or
+  `input.npz`. The node requires `model.pt2` afterwards. Stages:
+  `export_reference` (plus `kernelgen_toolkit`).
 - `verify_evaluator` (`evaluator_check.py`): runs `yasp-toolkit eval workers
   --tag routing=<eval_routing>`, bounded, and parses its table for a row whose
   GPU Name and Routing equal the config's `gpu` and `eval_routing` exactly.
@@ -115,20 +124,17 @@ Every node either advances the state or records a failure stage in
   `customer_message`: the benchmark numbers and the inspected kernelgen report
   on success, or the message looked up by stage in `messages.py`.
 
-## Container graph
+## Model-check graph
 
 Run by `python -m kronos_edge.eager_check` with `--device cuda` and the
-`--precision`, `--threshold`, and `--dependency` values from the config.
+`--precision` and `--threshold` values from the config.
 
-- `load_model` (`eager_check.py`): selects the device, pip-installs the
-  config's `dependencies` into the container's venv under a constraints file
-  pinning every distribution already there (output captured, so
-  stdout stays the user's), imports `model.py`, finds `Model` and
-  `get_inputs()` or `get_fwd_args()`, and constructs the model. An import that
-  raises `ModuleNotFoundError` is reported as `missing_dependency` with the
-  module's name. Stages: `select_device`, `install_dependencies`,
-  `import_module`, `missing_dependency`, `find_model_class`,
-  `find_get_inputs`, `init_model`.
+- `load_model` (`eager_check.py`): selects the device, imports `model.py`,
+  finds `Model` and `get_inputs()` or `get_fwd_args()`, and constructs the
+  model. Nothing is installed: an import that raises `ModuleNotFoundError` is
+  reported as `missing_dependency` with the module's name, for the user to
+  install into this environment. Stages: `select_device`, `import_module`,
+  `missing_dependency`, `find_model_class`, `find_get_inputs`, `init_model`.
 - `validate_inputs` (`eager_check.py`): calls `get_inputs()`, loads
   `input.npz`, and checks keys, shapes, and dtypes. Stages: `get_inputs`,
   `load_npz`, `validate_inputs`.

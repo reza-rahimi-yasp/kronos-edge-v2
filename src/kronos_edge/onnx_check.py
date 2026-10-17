@@ -1,6 +1,6 @@
 """ONNX export check: export the eagerly-run model with the dynamo exporter.
 
-Runs inside the container after the eager check, on the model and inputs
+Runs in the model-check subprocess after the eager check, on the model and inputs
 already in state. A copy of the model and its floating-point inputs is cast
 to the configured precision first, whatever precision the user wrote the
 model in, so the ONNX, and the TensorRT engine built from it, carry that
@@ -80,7 +80,7 @@ def export_onnx(state: State) -> State:
         try:
             program = export(model, inputs)
         except ImportError:
-            # The dynamo exporter imports onnx and onnxscript lazily; the image lacks them.
+            # The dynamo exporter imports onnx and onnxscript lazily; this environment lacks them.
             stage = "onnx_exporter"
             raise
         except TorchExportError as exc:

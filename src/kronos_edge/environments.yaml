@@ -1,8 +1,10 @@
 # Supported environments. One for now: this machine. A user's config.yaml
-# must match one entry exactly on gpu, driver, cuda, tensorrt, and torch.
+# must match one entry exactly on gpu, driver, cuda, tensorrt, and torch, and
+# the Python environment the check runs in must have that torch, CUDA build,
+# TensorRT, and GPU (the driver is not checked). The Dockerfile is the recipe
+# for the environment; the check never builds or runs it.
 environments:
   - name: rtx5090-cuda130
-    image: kronos-edge:rtx5090-cuda130
     dockerfile: docker/rtx5090-cuda130/Dockerfile
     gpu: NVIDIA GeForce RTX 5090
     driver: "580.95.05"

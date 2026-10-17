@@ -2,8 +2,7 @@ import logging
 
 import pytest
 
-from conftest import CONFIG, ENVIRONMENT, REGISTRY, write_yaml
-from kronos_edge import container, env_check
+from conftest import CONFIG, ENVIRONMENT, write_yaml
 from kronos_edge.workflow import main, run_check
 
 
@@ -18,7 +17,7 @@ def run(config, environments, good_model):
 
 @pytest.mark.parametrize(
     "setting, value",
-    [("precision", "fp16"), ("metric", "cosine"), ("threshold", 0.5), ("dependencies", ["timm", "einops==0.8.0"])],
+    [("precision", "fp16"), ("metric", "cosine"), ("threshold", 0.5)],
 )
 def test_settings_are_accepted_and_ignored_by_matching(tmp_path, env_files, good_model, setting, value):
     """The registry has no settings; the config matches on the environment fields alone."""
@@ -79,9 +78,7 @@ def without(key):
         pytest.param(without("threshold"), "threshold", id="missing_threshold"),
         pytest.param({**CONFIG, "threshold": 1.5}, "threshold", id="threshold_above_one"),
         pytest.param({**CONFIG, "threshold": "0.99"}, "threshold", id="threshold_not_a_number"),
-        pytest.param({**CONFIG, "dependencies": "timm"}, "dependencies", id="dependencies_not_a_list"),
-        pytest.param({**CONFIG, "dependencies": [""]}, "dependencies", id="dependencies_empty_name"),
-        pytest.param({**CONFIG, "dependencies": [1]}, "dependencies", id="dependencies_not_strings"),
+        pytest.param({**CONFIG, "dependencies": ["timm"]}, "dependencies", id="retired_dependencies_field"),
         pytest.param({**CONFIG, "foo": "bar"}, "foo", id="extra_field"),
         pytest.param({**CONFIG, "cuda": 13.0}, "quoted", id="unquoted_version"),
         pytest.param({**CONFIG, "torch": "latest"}, "torch", id="bad_version_format"),
@@ -126,48 +123,6 @@ def test_mismatch_on_any_field_is_rejected(tmp_path, caplog, env_files, good_mod
     assert "rtx5090-cuda130" in state["customer_message"]
     assert "9.9.9" in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == ["match_environment"]
-
-
-def test_host_gpu_must_match_environment(monkeypatch, caplog, env_files, good_model):
-    config, environments = env_files
-    monkeypatch.setattr(env_check, "host_gpu", lambda: (ENVIRONMENT["gpu"], "570.00.00"))
-
-    state = run(config, environments, good_model)
-
-    assert state["outcome"] == "failure"
-    assert state["error"] == "host_gpu"
-    assert "570.00.00" in state["customer_message"]
-    assert [r.stage for r in error_records(caplog)] == ["host_gpu"]
-
-
-def test_missing_image_is_reported_with_build_command(monkeypatch, caplog, env_files, good_model):
-    config, environments = env_files
-    monkeypatch.setattr(env_check, "image_exists", lambda image: False)
-
-    state = run(config, environments, good_model)
-
-    assert state["outcome"] == "failure"
-    assert state["error"] == "image_available"
-    assert "docker build" in state["customer_message"]
-    assert REGISTRY["environments"][0]["image"] in state["customer_message"]
-    # The model-check image carries no yasp package, so its build needs no registry key.
-    assert "--secret" not in state["customer_message"]
-    assert [r.stage for r in error_records(caplog)] == ["image_available"]
-
-
-def test_missing_export_image_is_reported_with_its_build_command(monkeypatch, caplog, env_files, good_model):
-    """The export image installs yasp-agent from the yasp index, so its build command names the registry-key secret."""
-    config, environments = env_files
-    monkeypatch.setattr(env_check, "image_exists", lambda image: image != container.EXPORT_IMAGE)
-
-    state = run(config, environments, good_model)
-
-    assert state["outcome"] == "failure"
-    assert state["error"] == "export_image_available"
-    assert container.EXPORT_IMAGE in state["customer_message"]
-    assert f"docker build --secret id=yasp-netrc,src=<netrc file> -f {container.EXPORT_DOCKERFILE}" in state["customer_message"]
-    assert "README.md" in state["customer_message"]
-    assert [r.stage for r in error_records(caplog)] == ["export_image_available"]
 
 
 def test_main_accepts_environments_override(env_files, good_model, capsys):

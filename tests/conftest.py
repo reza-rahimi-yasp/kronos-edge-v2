@@ -9,7 +9,7 @@ import yaml
 
 import torch
 
-from kronos_edge import benchmark_check, container, eager_check, env_check, kernelgen_check, tensorrt_check
+from kronos_edge import benchmark_check, eager_check, kernelgen_check, model_check, preflight, tensorrt_check
 
 ENVIRONMENT = {
     "gpu": "NVIDIA GeForce RTX 5090",
@@ -26,12 +26,15 @@ REGISTRY = {
     "environments": [
         {
             "name": "rtx5090-cuda130",
-            "image": "kronos-edge:rtx5090-cuda130",
             "dockerfile": "docker/rtx5090-cuda130/Dockerfile",
             **ENVIRONMENT,
         }
     ]
 }
+
+# What the preflight probe reports from a Python environment that is the registry entry: the versions as the
+# packages print them (torch with its CUDA build label, TensorRT with its build number) and the GPU torch sees.
+PROBE = {"torch": "2.14.1+cu130", "cuda": "13.0", "tensorrt": "11.4.0.106", "gpu": "NVIDIA GeForce RTX 5090"}
 
 GOOD_MODEL = """
 import torch
@@ -72,40 +75,22 @@ def run_in_tmp_path(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def host_matches_registry(monkeypatch):
-    """Tests never touch docker or nvidia-smi; the host looks like the registry entry."""
-    monkeypatch.setattr(env_check, "image_exists", lambda image: True)
-    monkeypatch.setattr(env_check, "host_gpu", lambda: (ENVIRONMENT["gpu"], ENVIRONMENT["driver"]))
+def environment_matches_registry(monkeypatch):
+    """Tests never probe the real environment: this one looks like the registry entry, with the toolkit on the path."""
+    monkeypatch.setattr(preflight, "run_probe", lambda: dict(PROBE))
+    monkeypatch.setattr(preflight, "toolkit_on_path", lambda: "/usr/local/bin/yasp-toolkit")
 
 
 @pytest.fixture(autouse=True)
 def eager_check_runs_in_process(monkeypatch):
-    """Stand in for `docker run`: run the eager sub-graph here, on CPU, write its report, return its exit code."""
+    """Stand in for the model-check subprocess: run the eager sub-graph here, on CPU, write its report, return its exit code."""
 
-    def fake_run_container(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level, dependencies):
-        state = eager_check.run(
-            model_path, npz_path, artifacts_dir, precision=precision, threshold=threshold, device="cpu",
-            dependencies=dependencies,
-        )
-        (Path(report_dir) / container.REPORT_FILE).write_text(eager_check.report(state))
+    def fake_run_process(model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level):
+        state = eager_check.run(model_path, npz_path, artifacts_dir, precision=precision, threshold=threshold, device="cpu")
+        (Path(report_dir) / model_check.REPORT_FILE).write_text(eager_check.report(state))
         return 0 if state.get("error") is None else 1
 
-    monkeypatch.setattr(container, "run_container", fake_run_container)
-
-
-class _Installed(list):
-    """The lists pip was asked to install; `real` is the worker itself for the tests that exercise it."""
-
-    real = None
-
-
-@pytest.fixture(autouse=True)
-def pip_stub(monkeypatch):
-    """Tests never shell out: record what the container would pip install instead of installing it."""
-    installed = _Installed()
-    installed.real = eager_check.install
-    monkeypatch.setattr(eager_check, "install", lambda packages: installed.append(list(packages)))
-    return installed
+    monkeypatch.setattr(model_check, "run_process", fake_run_process)
 
 
 FAKE_ENGINE = b"fake serialized engine"
@@ -113,7 +98,7 @@ FAKE_ENGINE = b"fake serialized engine"
 
 @pytest.fixture(autouse=True)
 def tensorrt_stub(monkeypatch):
-    """Stand in for TensorRT, which only exists in the image: hand back fixed bytes instead of building.
+    """Stand in for TensorRT, which the test environment lacks: hand back fixed bytes instead of building.
 
     Returns the real worker for the one test that exercises its import failure.
     """
@@ -136,7 +121,7 @@ class FakeEngineRunner:
 
 @pytest.fixture(autouse=True)
 def engine_runner_stub(monkeypatch):
-    """The engine only runs on the GPU in the image; here it is the eager model behind the runner interface."""
+    """The engine only runs on the GPU; here it is the eager model behind the runner interface."""
     monkeypatch.setattr(benchmark_check, "load_engine", FakeEngineRunner)
 
 
@@ -151,6 +136,9 @@ FAKE_INSPECT = "kernelgen_report.json\n  optimized: True\n  speedup: 2.000\n  co
 FAKE_TASK_LINE = "  task 00000000-0000-0000-0000-000000000000 (completed)\n"
 
 FAKE_REFERENCE = b"reference written by yasp-toolkit kernelgen export"
+
+# What `kernelgen export` prints: the user's model may print here too, so it never reaches the check's stdout.
+FAKE_EXPORT_OUTPUT = "  wrote      model.pt2\n"
 
 
 def evaluator_listing(*rows):
@@ -169,7 +157,7 @@ def evaluator_listing(*rows):
 
 
 def fake_toolkit(args, timeout=None):
-    """What a successful yasp-toolkit run leaves behind: the kernel and its report, the rendered report, or a listing.
+    """What a successful yasp-toolkit run leaves behind: the reference, the kernel and its report, the rendered report, or a listing.
 
     `eval workers` lists an evaluator advertising the config's GPU under the routing key asked for,
     so by default a run finds the persistent worker it needs registered.
@@ -179,7 +167,10 @@ def fake_toolkit(args, timeout=None):
         return Path(args[args.index(name) + 1])
 
     stdout = FAKE_TASK_LINE
-    if args[:2] == ["kernelgen", "compile"]:
+    if args[:2] == ["kernelgen", "export"]:
+        option("--output").write_bytes(FAKE_REFERENCE)
+        stdout = FAKE_EXPORT_OUTPUT
+    elif args[:2] == ["kernelgen", "compile"]:
         option("--output").write_text(FAKE_KERNEL)
         option("--report").write_text(FAKE_REPORT)
     elif args[:2] == ["eval", "inspect"]:
@@ -198,18 +189,6 @@ def toolkit_stub(monkeypatch):
     monkeypatch.setattr(kernelgen_check, "run_toolkit", fake_toolkit)
 
 
-def fake_export(model_path, artifacts_dir, dependencies):
-    """What the export container leaves behind: the reference `yasp-toolkit kernelgen export` wrote, and its output."""
-    (Path(artifacts_dir) / "model.pt2").write_bytes(FAKE_REFERENCE)
-    return subprocess.CompletedProcess(["docker", "run"], 0, stdout="  wrote      /work/artifact/model.pt2\n", stderr="")
-
-
-@pytest.fixture(autouse=True)
-def export_stub(monkeypatch):
-    """Stand in for the export container (`docker run` of the export image): tests never shell out."""
-    monkeypatch.setattr(container, "run_export", fake_export)
-
-
 @pytest.fixture
 def env_files(tmp_path):
     """A valid config.yaml and a registry that matches it."""
@@ -220,7 +199,7 @@ def env_files(tmp_path):
 
 @pytest.fixture
 def artifacts(tmp_path):
-    """An existing artifact directory, as the container sees the one the host created and mounted."""
+    """An existing artifact directory, as the model-check subprocess sees the one the workflow created."""
     path = tmp_path / "art"
     path.mkdir()
     return path

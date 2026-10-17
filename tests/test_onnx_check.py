@@ -7,7 +7,7 @@ import onnx
 import pytest
 import torch
 
-from kronos_edge import container, eager_check, onnx_check
+from kronos_edge import eager_check, model_check, onnx_check
 from kronos_edge.workflow import run_check
 from test_eager_check import CONV_RELU, X, error_records, run, write_model, write_npz
 
@@ -124,21 +124,19 @@ def test_export_is_written_to_the_artifact_directory(tmp_path, monkeypatch, env_
 def test_report_directory_holds_only_the_report(tmp_path, monkeypatch, env_files):
     """The export must not leave an .onnx file next to report.json for the host to clean up."""
     seen = {}
-    real_run_container = container.run_container
+    real_run_process = model_check.run_process
 
-    def spying_run_container(image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level, dependencies):
-        code = real_run_container(
-            image, model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level, dependencies
-        )
+    def spying_run_process(model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level):
+        code = real_run_process(model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level)
         seen["files"] = sorted(f.name for f in Path(report_dir).iterdir())
         return code
 
-    monkeypatch.setattr(container, "run_container", spying_run_container)
+    monkeypatch.setattr(model_check, "run_process", spying_run_process)
 
     state = run(env_files, write_model(tmp_path, CONV_RELU), write_npz(tmp_path, [X]))
 
     assert state["outcome"] == "success"
-    assert seen["files"] == [container.REPORT_FILE]
+    assert seen["files"] == [model_check.REPORT_FILE]
 
 
 def test_failed_export_writes_no_onnx_file(tmp_path, env_files):
@@ -156,7 +154,7 @@ def test_unwritable_artifact_directory_is_its_own_stage(tmp_path, env_files):
                       environments_path=environments, artifacts_path=tmp_path / "blocked")
 
     assert state["outcome"] == "failure"
-    assert state["error"] == "container_run"
+    assert state["error"] == "model_check_run"
     assert "blocked" in state["customer_message"]
 
 

@@ -1,8 +1,8 @@
 """The files the checks write for the user, and the host-side cleanup between runs.
 
-No heavy imports: the host loads this to clear the artifact directory before
-the container starts. Every file a node writes, in the container or on the
-host, is listed here, so a rerun in
+No heavy imports: the workflow loads this to clear the artifact directory
+before the model check starts. Every file a node writes, in the model-check
+subprocess, by the toolkit, or in the workflow, is listed here, so a rerun in
 the same directory never shows a stale file next to a fresh one. Files an
 earlier version wrote and this one no longer does are cleared too, so an
 artifact directory carried over from that version does not keep them. Files
@@ -15,7 +15,7 @@ EXPORTED_FILE = "model.onnx"
 SIMPLIFIED_FILE = "model_simplified.onnx"
 ENGINE_FILE = "model.engine"
 BENCHMARK_FILE = "benchmark.json"
-PT2_FILE = "model.pt2"  # the reference `yasp-toolkit kernelgen export` writes in the export container
+PT2_FILE = "model.pt2"  # the reference `yasp-toolkit kernelgen export` writes from model.py
 KERNEL_FILE = "kernel.py"  # the optimized kernel kernelgen returns
 KERNELGEN_REPORT_FILE = "kernelgen_report.json"  # the kernelgen job's report
 MANAGED_FILES = (

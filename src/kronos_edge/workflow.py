@@ -1,11 +1,11 @@
-"""Workflow: validate the environment on the host, run the checks and the reference export in containers, then Gaia kernelgen on the host."""
+"""Workflow: validate the config and this environment, run the model checks in a subprocess, then Gaia kernelgen through yasp-toolkit."""
 
 import argparse
 from pathlib import Path
 
 from langgraph.graph import END, START, StateGraph
 
-from kronos_edge import container, env_check, evaluator_check, kernelgen_check
+from kronos_edge import env_check, evaluator_check, kernelgen_check, model_check, preflight
 from kronos_edge.log import PACKAGE_LOGGER, configure, get_logger
 from kronos_edge.messages import CUSTOMER_MESSAGES
 from kronos_edge.state import State, route_on_error
@@ -53,16 +53,18 @@ def build_graph():
     graph = StateGraph(State)
     graph.add_node("load_config", env_check.load_config)
     graph.add_node("match_environment", env_check.match_environment)
-    graph.add_node("run_in_container", container.run_in_container)
-    graph.add_node("export_reference", container.export_reference)
+    graph.add_node("preflight", preflight.preflight)
+    graph.add_node("run_model_check", model_check.run_model_check)
+    graph.add_node("export_reference", kernelgen_check.export_reference)
     graph.add_node("verify_evaluator", evaluator_check.verify_evaluator)
     graph.add_node("kernelgen", kernelgen_check.kernelgen)
     graph.add_node("success", success)
     graph.add_node("failure", failure)
     graph.add_edge(START, "load_config")
     graph.add_conditional_edges("load_config", route_on_error, {"ok": "match_environment", "failure": "failure"})
-    graph.add_conditional_edges("match_environment", route_on_error, {"ok": "run_in_container", "failure": "failure"})
-    graph.add_conditional_edges("run_in_container", route_on_error, {"ok": "export_reference", "failure": "failure"})
+    graph.add_conditional_edges("match_environment", route_on_error, {"ok": "preflight", "failure": "failure"})
+    graph.add_conditional_edges("preflight", route_on_error, {"ok": "run_model_check", "failure": "failure"})
+    graph.add_conditional_edges("run_model_check", route_on_error, {"ok": "export_reference", "failure": "failure"})
     graph.add_conditional_edges("export_reference", route_on_error, {"ok": "verify_evaluator", "failure": "failure"})
     graph.add_conditional_edges("verify_evaluator", route_on_error, {"ok": "kernelgen", "failure": "failure"})
     graph.add_conditional_edges("kernelgen", route_on_error, {"ok": "success", "failure": "failure"})

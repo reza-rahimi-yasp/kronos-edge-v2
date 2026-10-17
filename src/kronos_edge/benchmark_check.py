@@ -1,6 +1,6 @@
 """Benchmark check: time eager against the TensorRT engine and compare their outputs.
 
-Runs inside the container after the engine build, on the eager model, the
+Runs in the model-check subprocess after the engine build, on the eager model, the
 user's inputs, and the engine bytes already in state. Both sides are warmed
 up, then run many times; every run's latency is kept and reported as mean,
 median, and p95 in milliseconds, with the speedup as the ratio of medians.
