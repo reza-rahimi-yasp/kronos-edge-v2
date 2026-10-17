@@ -479,3 +479,10 @@ nothing binary is checked in. They need neither a GPU, TensorRT, nor
 and the model-check graph runs in-process on the CPU.
 
 See `architecture.md` for how the pieces fit together.
+
+## Experiments
+
+`experiments/` holds isolated, model-specific experiments that never touch
+`src/` or the check's images. `experiments/gaia_tensorrt/README.md` wraps the
+CUDA kernels Gaia generated for one model in TensorRT `IPluginV3` plugins and
+runs the resulting engine from a C++ runner without Python.

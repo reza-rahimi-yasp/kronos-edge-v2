@@ -1,0 +1,10 @@
+{
+  "source": "kernel.py returned by yasp-toolkit kernelgen compile (module_source.py)",
+  "kernel_py_sha256": "980698e39f89ac6371c3d766e872f688c4645e1a2150499792dbad373527c032",
+  "segments_sha256": {
+    "affine_helpers": "eb7991bd5d7e256a46317c51e8cec5bcdfd647da63878534df89aeb9af1af802",
+    "kernels": "28b95d91fc2437563e2954dbe8afabb63ba4af914da1d3498f2cb6b659ace839"
+  },
+  "header_sha256": "c871af64eb79d5dc33fc01d7389da2687dfbd38d1a2a5bd72be34e9b68ca2a9c",
+  "note": "Only these segments are pristine Gaia output. Host wrappers, the out-of-place epilogue (gaia_adapted_epilogue.cuh), the plugins, and the runner were written for this experiment."
+}
