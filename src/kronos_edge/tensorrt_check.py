@@ -1,6 +1,6 @@
 """TensorRT engine check: build a strongly typed engine from the simplified ONNX.
 
-Runs inside the container after the ONNX simplification. The simplified
+Runs in the model-check subprocess after the ONNX simplification. The simplified
 model is parsed from its file in the artifact directory, so external weight
 data is found next to it. The network is strongly typed: the engine computes
 in the tensor types the ONNX carries, which is how the configured precision
@@ -12,8 +12,8 @@ serialized engine is written as ``model.engine`` and kept in state for the
 next node.
 
 tensorrt is imported inside ``build``, so a missing package reaches the
-report as the ``tensorrt_import`` stage instead of crashing the container.
-TensorRT only exists in the image; tests replace ``build``.
+report as the ``tensorrt_import`` stage instead of crashing the subprocess.
+TensorRT needs the GPU; tests replace ``build``.
 """
 
 from pathlib import Path

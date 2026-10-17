@@ -4,18 +4,18 @@ from pathlib import Path
 
 import pytest
 
-from kronos_edge import benchmark_check, container, eager_check, env_check, evaluator_check, kernelgen_check, messages, onnx_check, onnxsim_check, tensorrt_check, workflow
+from kronos_edge import benchmark_check, eager_check, env_check, evaluator_check, kernelgen_check, messages, model_check, onnx_check, onnxsim_check, preflight, tensorrt_check, workflow
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 
 def test_host_imports_without_torch_or_numpy():
-    """The host only validates config and launches containers; it must not need the model stack."""
+    """The workflow only validates config and launches subprocesses; it must not need the model stack."""
     code = (
         "import sys\n"
         "sys.modules['torch'] = None\n"
         "sys.modules['numpy'] = None\n"
-        "import kronos_edge.workflow, kronos_edge.container, kronos_edge.env_check, kronos_edge.evaluator_check, kronos_edge.kernelgen_check, kronos_edge.state, kronos_edge.artifacts\n"
+        "import kronos_edge.workflow, kronos_edge.model_check, kronos_edge.preflight, kronos_edge.env_check, kronos_edge.evaluator_check, kronos_edge.kernelgen_check, kronos_edge.state, kronos_edge.artifacts\n"
         "print('host ok')\n"
     )
 
@@ -45,7 +45,7 @@ def test_merge_rejects_duplicate_stage_names():
 
 
 def test_merged_table_is_the_union_of_every_check():
-    tables = (env_check.CUSTOMER_MESSAGES, container.CUSTOMER_MESSAGES, eager_check.CUSTOMER_MESSAGES, onnx_check.CUSTOMER_MESSAGES, onnxsim_check.CUSTOMER_MESSAGES, tensorrt_check.CUSTOMER_MESSAGES, benchmark_check.CUSTOMER_MESSAGES, evaluator_check.CUSTOMER_MESSAGES, kernelgen_check.CUSTOMER_MESSAGES)
+    tables = (env_check.CUSTOMER_MESSAGES, preflight.CUSTOMER_MESSAGES, model_check.CUSTOMER_MESSAGES, eager_check.CUSTOMER_MESSAGES, onnx_check.CUSTOMER_MESSAGES, onnxsim_check.CUSTOMER_MESSAGES, tensorrt_check.CUSTOMER_MESSAGES, benchmark_check.CUSTOMER_MESSAGES, evaluator_check.CUSTOMER_MESSAGES, kernelgen_check.CUSTOMER_MESSAGES)
 
     assert workflow.CUSTOMER_MESSAGES == {k: v for t in tables for k, v in t.items()}
     assert len(workflow.CUSTOMER_MESSAGES) == sum(len(t) for t in tables)

@@ -1,36 +1,16 @@
-"""Environment check: validate the user's config.yaml and match it to an image.
+"""Environment check: validate the user's config.yaml and match it to a registry entry.
 
 The config names the GPU, driver, CUDA, TensorRT, and torch versions the user
-wants. It must match one registry entry exactly, that entry must describe the
-GPU in this machine, and the entry's Docker image and the export image must
-be built.
+wants. It must match one registry entry exactly; the preflight then verifies
+that the Python environment the check runs in is that entry.
 """
 
-import subprocess
-
 from kronos_edge.config import CONFIG_FIELDS, EnvironmentConfig, load_environments, parse_config, read_yaml
-from kronos_edge.container import EXPORT_DOCKERFILE, EXPORT_IMAGE
 from kronos_edge.log import get_logger
 from kronos_edge.messages import ENV as CUSTOMER_MESSAGES
 from kronos_edge.state import State, fail
 
 logger = get_logger(__name__)
-
-
-
-def image_exists(image: str) -> bool:
-    result = subprocess.run(["docker", "image", "inspect", image], capture_output=True)
-    return result.returncode == 0
-
-
-def host_gpu() -> tuple[str, str]:
-    """Return (gpu name, driver version) of the first GPU, as nvidia-smi reports them."""
-    result = subprocess.run(
-        ["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
-        capture_output=True, text=True, check=True,
-    )
-    name, driver = result.stdout.splitlines()[0].split(", ")
-    return name.strip(), driver.strip()
 
 
 def _describe(config: EnvironmentConfig) -> str:
@@ -63,29 +43,6 @@ def match_environment(state: State) -> State:
             supported = "; ".join(f"{e.name} ({_describe(e)})" for e in environments)
             raise ValueError(f"requested {_describe(config)}; supported: {supported}")
         logger.info("matched environment %s", environment.name, extra={"stage": stage})
-
-        stage = "host_gpu"
-        name, driver = host_gpu()
-        if (name, driver) != (environment.gpu, environment.driver):
-            raise ValueError(
-                f"this machine has gpu={name}, driver={driver}; "
-                f"environment {environment.name} needs gpu={environment.gpu}, driver={environment.driver}"
-            )
-
-        stage = "image_available"
-        if not image_exists(environment.image):
-            raise ValueError(
-                f"image {environment.image} not found; build it with: "
-                f"docker build -f {environment.dockerfile} -t {environment.image} ."
-            )
-
-        stage = "export_image_available"
-        if not image_exists(EXPORT_IMAGE):
-            raise ValueError(
-                f"image {EXPORT_IMAGE} not found; build it with the registry-key secret README.md describes "
-                f'under "Build the images": docker build --secret id=yasp-netrc,src=<netrc file> '
-                f"-f {EXPORT_DOCKERFILE} -t {EXPORT_IMAGE} ."
-            )
     except Exception as exc:
         return fail(logger, stage, exc)
     return {"environment": environment}

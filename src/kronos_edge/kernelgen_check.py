@@ -1,12 +1,21 @@
-"""Kernelgen check: generate an optimized kernel with Gaia, then show the report it came with.
+"""Kernelgen checks: export the reference, generate an optimized kernel with Gaia, then show the report it came with.
 
-Runs on the host, after the export and the evaluator check: kernelgen is a hosted
-service reached through the ``yasp-toolkit`` command of the yasp-agent package,
-which needs the user's Yasp API key (``YASP_API_KEY`` in the environment, or the
-OS keyring filled by ``yasp-toolkit keyring set``; see ``.env.example``), so it
-never runs in a container. The node follows the documented starting workflow
+Run after the model check: kernelgen is a hosted service reached through the
+``yasp-toolkit`` command of the yasp-agent package, installed on its own and
+run as a subprocess, never imported. It needs the user's Yasp API key
+(``YASP_API_KEY`` in the environment, or the OS keyring filled by
+``yasp-toolkit keyring set``; see ``.env.example``). The nodes follow the
+documented starting workflow
 (https://compile.yasp.ai/help/gaia/generate-your-first-kernel/):
 
+- ``yasp-toolkit kernelgen export`` on the user's ``model.py``
+  (https://compile.yasp.ai/help/reference/kernelgen/#export) writes
+  ``model.pt2`` to the artifact directory. The exporter builds
+  ``Model(*get_init_inputs())``, calls ``get_inputs()``, and traces with
+  ``torch.export`` in its own environment, however the toolkit's torch is set
+  up: nothing here forces the CPU or the GPU. It never sees the benchmarked
+  instance or ``input.npz``. Its output is captured, since the user's model
+  prints on it.
 - ``yasp-toolkit kernelgen compile`` on the exported ``model.pt2`` for the config's
   GPU, with its in-compile evaluations routed by the config's ``eval_routing`` to
   the user's Gaia worker (https://compile.yasp.ai/help/reference/kernelgen/#compile).
@@ -66,6 +75,26 @@ def run_logged(stage: str, args: list[str], timeout: float | None = None) -> tup
     return result, output
 
 
+def export_reference(state: State) -> State:
+    stage = "export_reference"
+    try:
+        artifacts = Path(state["artifacts_path"]).resolve()
+        reference = artifacts / PT2_FILE
+        args = ["kernelgen", "export", "--input", str(Path(state["model_path"]).resolve()), "--output", str(reference)]
+        logger.info("exporting the kernelgen reference from %s", state["model_path"], extra={"stage": stage})
+        try:
+            _, output = run_logged(stage, args)
+        except FileNotFoundError:
+            stage = "kernelgen_toolkit"
+            raise
+        if not reference.is_file():
+            raise ToolkitFailed(f"{TOOLKIT} exited 0 without writing {PT2_FILE}\n{output}")
+        logger.info("wrote %s", reference, extra={"stage": stage})
+    except Exception as exc:
+        return fail(logger, stage, exc)
+    return {}
+
+
 def kernelgen(state: State) -> State:
     stage = "kernelgen_reference"
     try:
@@ -77,7 +106,7 @@ def kernelgen(state: State) -> State:
         stage = "kernelgen_engine"  # the TensorRT output this step waits for
         engine = artifacts / ENGINE_FILE
         if not engine.is_file():
-            raise FileNotFoundError(f"{engine} was not written by the container")
+            raise FileNotFoundError(f"{engine} was not written by the model check")
 
         stage = "kernelgen_compile"
         config = state["config"]

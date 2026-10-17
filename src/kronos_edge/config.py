@@ -40,16 +40,16 @@ class Config(EnvironmentConfig):
     # which pins kernelgen's evaluations to it. Required: without it any evaluator advertising the
     # config's GPU could take the job, and the evaluation must run on this machine.
     eval_routing: Annotated[StrictStr, Field(min_length=1)]
-    # pip requirements model.py needs beyond the image, installed inside the container before model.py is
-    # imported. Optional: a model that needs only torch lists nothing.
-    dependencies: list[Annotated[StrictStr, Field(min_length=1)]] = []
 
 
 class Environment(EnvironmentConfig):
-    """One entry of the registry: a config plus the image that provides it."""
+    """One entry of the registry: a config plus the Dockerfile that is the recipe for it.
+
+    The Dockerfile documents the environment and is never built or run by the check: the Python
+    environment the check starts in is verified against the entry by the preflight.
+    """
 
     name: StrictStr
-    image: StrictStr
     dockerfile: StrictStr
 
     def matches(self, config: EnvironmentConfig) -> bool:

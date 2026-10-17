@@ -1,12 +1,12 @@
 """ONNX simplification check: run onnxsim on the exported model and keep the result.
 
-Runs inside the container after the ONNX export, on the model in state.
+Runs in the model-check subprocess after the ONNX export, on the model in state.
 The simplified model stays in state for the next node and is written to the
 artifact directory as ``model_simplified.onnx``, with the weights in a
 companion ``.data`` file when they exceed the protobuf limit.
 
 onnx and onnxsim are imported inside the node, so a missing package reaches
-the report as a stage instead of crashing the container at startup.
+the report as a stage instead of crashing the subprocess at startup.
 """
 
 from pathlib import Path

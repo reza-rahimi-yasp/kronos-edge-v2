@@ -2,7 +2,7 @@
 
 The worker is the user's persistent deployment (the Gaia Docker guide plus a routing tag); the
 check only lists the registered evaluators with `yasp-toolkit eval workers` and never starts,
-stops, or removes a container. The toolkit is replaced by the autouse `toolkit_stub`; the tests
+stops, or removes a worker. The toolkit is replaced by the autouse `toolkit_stub`; the tests
 cover the node around it and the listing parser against the toolkit's table.
 """
 
@@ -41,8 +41,8 @@ def test_a_registered_evaluator_lets_kernelgen_run(tmp_path, monkeypatch, env_fi
     state = run(env_files, *good_model)
 
     assert state["outcome"] == "success"
-    assert commands(calls) == [["eval", "workers"], ["kernelgen", "compile"], ["eval", "inspect"]]
-    assert option(calls[0], "--tag") == f"routing={ROUTING}"
+    assert commands(calls) == [["kernelgen", "export"], ["eval", "workers"], ["kernelgen", "compile"], ["eval", "inspect"]]
+    assert option(calls[1], "--tag") == f"routing={ROUTING}"
 
 
 @pytest.mark.parametrize(
@@ -68,7 +68,7 @@ def test_without_an_exact_match_the_check_stops_before_kernelgen(tmp_path, monke
     assert f"routing={ROUTING}" in state["customer_message"]
     assert "README.md" in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == ["evaluator_missing"]
-    assert commands(calls) == [["eval", "workers"]]
+    assert commands(calls) == [["kernelgen", "export"], ["eval", "workers"]]
     assert not (tmp_path / ".artifact" / "kernel.py").exists()
 
 
@@ -92,6 +92,8 @@ def test_listing_failures_are_stages_and_submit_nothing(tmp_path, monkeypatch, c
 
     def recording(args, timeout=None):
         calls.append((args, timeout))
+        if args[:2] == ["kernelgen", "export"]:  # the step before the listing is not under test here
+            return fake_toolkit(args)
         return toolkit(args, timeout=timeout)
 
     monkeypatch.setattr(kernelgen_check, "run_toolkit", recording)
@@ -102,11 +104,11 @@ def test_listing_failures_are_stages_and_submit_nothing(tmp_path, monkeypatch, c
     assert state["error"] == stage
     assert fragment in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == [stage]
-    assert [(args[:2], timeout) for args, timeout in calls] == [(["eval", "workers"], evaluator_check.LISTING_TIMEOUT_S)]
+    assert [(args[:2], timeout) for args, timeout in calls] == [(["kernelgen", "export"], None), (["eval", "workers"], evaluator_check.LISTING_TIMEOUT_S)]
     assert not (tmp_path / ".artifact" / "kernel.py").exists()
 
 
-def test_nothing_is_listed_when_the_container_fails(tmp_path, monkeypatch, env_files):
+def test_nothing_is_listed_when_the_model_check_fails(tmp_path, monkeypatch, env_files):
     calls = []
     monkeypatch.setattr(kernelgen_check, "run_toolkit", listing_toolkit(calls, [(GPU, ROUTING)]))
 

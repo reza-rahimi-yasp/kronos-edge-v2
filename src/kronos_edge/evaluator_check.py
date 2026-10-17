@@ -5,7 +5,7 @@ persistent deployment, set up once as the Gaia Docker guide documents
 (https://compile.yasp.ai/help/gaia/workers/docker/) with a
 ``--tag routing=<eval_routing>`` added at registration
 (https://compile.yasp.ai/help/gaia/workers/#tags-routing); it stays up and serves
-every generation. The check never starts, stops, or removes a container and
+every generation. The check never starts, stops, or removes a worker and
 mints no key: it lists the evaluators registered under the config's routing key
 with ``yasp-toolkit eval workers --tag routing=<key>``
 (https://compile.yasp.ai/help/reference/eval/#workers) and requires one
