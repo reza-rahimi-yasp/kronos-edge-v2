@@ -105,7 +105,7 @@ def test_nonfinite_score_fails_accuracy(tmp_path, caplog, monkeypatch, env_files
 
     state = run_with(tmp_path, env_files, source=SCALE, arrays=[ONES], threshold=0.0)
 
-    assert state["error"] == "accuracy"
+    assert state["tensorrt_error"] == "accuracy"
     assert "not a finite number" in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == ["accuracy"]
 
@@ -164,7 +164,7 @@ def test_output_below_threshold_is_the_accuracy_stage(tmp_path, caplog, monkeypa
     state = run_with(tmp_path, env_files, source=TWO_OUTPUTS, arrays=XY, threshold=0.999)
 
     assert state["outcome"] == "failure"
-    assert state["error"] == "accuracy"
+    assert state["tensorrt_error"] == "accuracy"
     assert "output 1" in state["customer_message"] and "0.999" in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == ["accuracy"]
     assert not (run_directory(tmp_path / ".artifact") / "benchmark.json").exists()
@@ -183,7 +183,7 @@ def test_threshold_from_config_decides(tmp_path, monkeypatch, env_files):
 
     assert passed["outcome"] == "success"
     assert 0.99 < passed["benchmark"]["values"][0] < 0.9999  # about 1 - var(noise) / 2
-    assert failed["error"] == "accuracy"
+    assert failed["tensorrt_error"] == "accuracy"
 
 
 @pytest.mark.parametrize(
@@ -198,7 +198,7 @@ def test_output_structure_mismatch_is_compare_outputs(tmp_path, caplog, monkeypa
 
     state = run_with(tmp_path, env_files, source=TWO_OUTPUTS, arrays=XY)
 
-    assert state["error"] == "compare_outputs"
+    assert state["tensorrt_error"] == "compare_outputs"
     assert fragment in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == ["compare_outputs"]
 
@@ -211,7 +211,7 @@ def test_engine_failure_is_benchmark_engine(tmp_path, caplog, monkeypatch, env_f
 
     state = run_with(tmp_path, env_files)
 
-    assert state["error"] == "benchmark_engine"
+    assert state["tensorrt_error"] == "benchmark_engine"
     assert "deserialize" in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == ["benchmark_engine"]
 

@@ -118,11 +118,13 @@ def test_successive_runs_keep_the_earlier_run_directories(monkeypatch, tmp_path,
 
     second = run_check(config, model, npz, environments_path=environments)
 
-    assert second["error"] == "onnx_simplify"
+    assert second["tensorrt_error"] == "onnx_simplify"
     assert sorted(f.name for f in art.iterdir()) == ["20261017T143005Z", "20261017T143100Z", "notes.txt"]
     assert {f.name: f.read_bytes() for f in first_run.iterdir()} == before
-    # The failed run keeps what it produced before the failure, and nothing of the first run.
-    assert sorted(f.name for f in (art / "20261017T143100Z").iterdir()) == ["model.onnx"]
+    # The failed run keeps what it produced before the failure and the kernelgen branch's files, and nothing of the first run.
+    assert sorted(f.name for f in (art / "20261017T143100Z").iterdir()) == [
+        "kernel.py", "kernelgen_report.json", "model.onnx", "model.pt2",
+    ]
 
 
 def test_two_runs_in_the_same_second_do_not_share_a_directory(monkeypatch, tmp_path, env_files, good_model):
@@ -206,8 +208,6 @@ def test_the_run_directory_is_created_before_the_subprocess_runs_and_handed_to_i
     def fake(model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level):
         seen["dir"] = Path(artifacts_dir)
         seen["exists"] = Path(artifacts_dir).is_dir()
-        for name in ("model.engine",):  # what the kernelgen step waits for besides the export's reference
-            (Path(artifacts_dir) / name).write_bytes(b"x")
         (Path(report_dir) / model_check.REPORT_FILE).write_text(json.dumps({"error": None, "benchmark": BENCHMARK}))
         return 0
 
@@ -272,6 +272,20 @@ def test_exit_code_mismatch_names_the_code(monkeypatch, env_files, good_model):
     state = run(env_files, good_model)
 
     assert "137" in state["customer_message"]
+
+
+def test_an_inner_tensorrt_branch_failure_is_kept_apart_and_kernelgen_runs(monkeypatch, caplog, env_files, good_model):
+    fake_process(monkeypatch, json.dumps({"error": "onnx_capture", "error_detail": "GuardOnDataDependentSymNode: inner"}), 1)
+
+    state = run(env_files, good_model)
+
+    assert state["outcome"] == "failure"
+    assert state["tensorrt_error"] == "onnx_capture"
+    assert state["tensorrt_error_detail"] == "GuardOnDataDependentSymNode: inner"
+    assert state.get("error") is None
+    assert "could not be traced by torch.export" in state["customer_message"]
+    assert "the kernel is" in state["customer_message"]
+    assert error_records(caplog) == []
 
 
 def test_inner_failure_passes_through_without_a_host_error(monkeypatch, caplog, env_files, good_model):

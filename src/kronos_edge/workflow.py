@@ -1,4 +1,11 @@
-"""Workflow: validate the config and this environment, run the model checks in a subprocess, then Gaia kernelgen through yasp-toolkit."""
+"""Workflow: validate the config and this environment, run the model checks in a subprocess, then Gaia kernelgen through yasp-toolkit.
+
+The model check's prerequisites (loading the model, validating input.npz, the
+eager forward) gate everything after them. Then the ONNX/TensorRT branch and
+the kernelgen branch are independent: a failure in the first is kept in
+``tensorrt_error`` and kernelgen still runs; a kernelgen failure keeps the
+first branch's results. Either failure fails the run, and the message reports both.
+"""
 
 import argparse
 from pathlib import Path
@@ -22,31 +29,56 @@ def _latency(name: str, ms: dict) -> str:
     return f"Latency per run, {name}: mean {ms['mean']:.3f} ms, median {ms['median']:.3f} ms, p95 {ms['p95']:.3f} ms."
 
 
-def success(state: State) -> State:
+def _tensorrt_lines(state: State) -> list[str]:
+    """The ONNX/TensorRT branch's result: the benchmark, or what failed."""
+    if state.get("tensorrt_error"):
+        return [CUSTOMER_MESSAGES[state["tensorrt_error"]], state["tensorrt_error_detail"]]
+    if "benchmark" not in state:
+        return []
     precision = state["config"].precision
     bench = state["benchmark"]
     speedup = bench["speedup"]
     comparison = f"{speedup:.1f}x faster" if speedup >= 1 else f"{1 / speedup:.1f}x slower"
     values = ", ".join(f"{v:.4f}" for v in bench["values"])
-    logger.info("all checks succeeded at %s; speedup %.2fx; kernelgen wrote %s", precision, speedup, state["kernel_path"])
-    return {
-        "outcome": "success",
-        "customer_message": "\n".join([
-            f"Eager run, ONNX export, ONNX simplification, TensorRT engine build ({precision}), and benchmark succeeded.",
-            _latency("eager", bench["eager_ms"]),
-            _latency("TensorRT", bench["tensorrt_ms"]),
-            f"TensorRT is {comparison} than eager (median). "
-            f"{bench['metric'].capitalize()} similarity: {values} (threshold {bench['threshold']}).",
-            f"The kernelgen optimization succeeded: the kernel is {state['kernel_path']}. "
-            "Its report, as yasp-toolkit eval inspect shows it:",
-            state["kernelgen_report"],
-        ]),
-    }
+    return [
+        f"Eager run, ONNX export, ONNX simplification, TensorRT engine build ({precision}), and benchmark succeeded.",
+        _latency("eager", bench["eager_ms"]),
+        _latency("TensorRT", bench["tensorrt_ms"]),
+        f"TensorRT is {comparison} than eager (median). "
+        f"{bench['metric'].capitalize()} similarity: {values} (threshold {bench['threshold']}).",
+    ]
+
+
+def _kernelgen_lines(state: State) -> list[str]:
+    """The kernelgen branch's result, once it produced a kernel."""
+    if "kernel_path" not in state:
+        return []
+    return [
+        f"The kernelgen optimization succeeded: the kernel is {state['kernel_path']}. "
+        "Its report, as yasp-toolkit eval inspect shows it:",
+        state["kernelgen_report"],
+    ]
+
+
+def success(state: State) -> State:
+    logger.info(
+        "all checks succeeded at %s; speedup %.2fx; kernelgen wrote %s",
+        state["config"].precision, state["benchmark"]["speedup"], state["kernel_path"],
+    )
+    return {"outcome": "success", "customer_message": "\n".join(_tensorrt_lines(state) + _kernelgen_lines(state))}
 
 
 def failure(state: State) -> State:
-    message = f"{CUSTOMER_MESSAGES[state['error']]}\n{state['error_detail']}"
-    return {"outcome": "failure", "customer_message": message}
+    """Report every branch's result: the ONNX/TensorRT branch first, then kernelgen, then the failure that stopped the run."""
+    lines = _tensorrt_lines(state) + _kernelgen_lines(state)
+    if state.get("error"):
+        lines += [CUSTOMER_MESSAGES[state["error"]], state["error_detail"]]
+    return {"outcome": "failure", "customer_message": "\n".join(lines)}
+
+
+def route_on_any_error(state: State) -> str:
+    """After the kernelgen branch: a failure of either branch fails the run."""
+    return "failure" if state.get("error") or state.get("tensorrt_error") else "ok"
 
 
 def build_graph():
@@ -67,7 +99,7 @@ def build_graph():
     graph.add_conditional_edges("run_model_check", route_on_error, {"ok": "export_reference", "failure": "failure"})
     graph.add_conditional_edges("export_reference", route_on_error, {"ok": "verify_evaluator", "failure": "failure"})
     graph.add_conditional_edges("verify_evaluator", route_on_error, {"ok": "kernelgen", "failure": "failure"})
-    graph.add_conditional_edges("kernelgen", route_on_error, {"ok": "success", "failure": "failure"})
+    graph.add_conditional_edges("kernelgen", route_on_any_error, {"ok": "success", "failure": "failure"})
     graph.add_edge("success", END)
     graph.add_edge("failure", END)
     return graph.compile()

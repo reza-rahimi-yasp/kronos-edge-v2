@@ -90,10 +90,13 @@ def test_failure_stages(tmp_path, caplog, monkeypatch, env_files, build, stage, 
     state = run_with_precision(tmp_path, env_files, "fp32")
 
     assert state["outcome"] == "failure"
-    assert state["error"] == stage
+    assert state["tensorrt_error"] == stage
     assert fragment in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == [stage]
-    assert sorted(f.name for f in run_directory(tmp_path / ".artifact").iterdir()) == ["model.onnx", "model_simplified.onnx"]  # no engine, no benchmark
+    # No engine, no benchmark; the kernelgen branch still runs.
+    assert sorted(f.name for f in run_directory(tmp_path / ".artifact").iterdir()) == [
+        "kernel.py", "kernelgen_report.json", "model.onnx", "model.pt2", "model_simplified.onnx",
+    ]
 
 
 def test_missing_tensorrt_is_a_support_failure(monkeypatch, caplog, good_model, artifacts, tensorrt_stub):

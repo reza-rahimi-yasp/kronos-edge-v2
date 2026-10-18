@@ -12,11 +12,13 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from conftest import CONFIG, FAKE_INSPECT, FAKE_REFERENCE, FAKE_TASK_LINE, fake_toolkit, run_directory, write_yaml
-from kronos_edge import artifacts, kernelgen_check
-from kronos_edge.workflow import run_check
+from kronos_edge import artifacts, kernelgen_check, model_check, tensorrt_check
+from kronos_edge.config import Config
+from kronos_edge.workflow import main, run_check
 from test_eager_check import CONV_RELU, TYPO, X, error_records, run, write_model, write_npz
 
 # Captured at import, before the autouse fixture replaces it with the stub.
@@ -57,7 +59,7 @@ def test_kernelgen_runs_after_the_export_and_its_report_is_inspected(tmp_path, m
     assert [args[:2] for args, _ in calls] == [["kernelgen", "export"], ["eval", "workers"], ["kernelgen", "compile"], ["eval", "inspect"]]
     compile_args, seen_before_compile = calls[2]
     inspect_args, seen_before_inspect = calls[3]
-    # kernelgen starts only once the export has written the reference and the model check the TensorRT engine.
+    # kernelgen starts once the export has written the reference; the ONNX/TensorRT branch ran before it.
     assert {"model.pt2", "model.engine", "model.onnx", "model_simplified.onnx"} <= set(seen_before_compile)
     assert "kernel.py" not in seen_before_compile
     art = run_directory(tmp_path / ".artifact")
@@ -314,38 +316,151 @@ def test_only_the_service_commands_get_the_yasp_credentials(tmp_path, monkeypatc
     assert env["COLUMNS"] == "200"
 
 
-def test_kernelgen_is_skipped_when_the_model_check_fails(tmp_path, monkeypatch, env_files):
+@pytest.mark.parametrize(
+    "source, arrays, stage",
+    [
+        pytest.param(CONV_RELU.replace("class Model(", "class Net("), [X], "find_model_class", id="model_does_not_load"),
+        pytest.param(CONV_RELU, [np.zeros((1, 3, 9, 9), dtype=np.float32)], "validate_inputs", id="input_npz_does_not_match"),
+        pytest.param(TYPO, [X], "forward", id="eager_forward_fails"),
+    ],
+)
+def test_kernelgen_is_skipped_when_a_prerequisite_fails(tmp_path, monkeypatch, env_files, source, arrays, stage):
+    """Loading the model, validating input.npz, and the eager forward gate both branches: no export, no toolkit call."""
     calls = []
     monkeypatch.setattr(kernelgen_check, "run_toolkit", recording_toolkit(calls, tmp_path))
 
-    state = run(env_files, write_model(tmp_path, TYPO), write_npz(tmp_path, [X]))
+    state = run(env_files, write_model(tmp_path, source), write_npz(tmp_path, arrays))
 
-    assert state["error"] == "forward"
+    assert state["outcome"] == "failure"
+    assert state["error"] == stage
+    assert "tensorrt_error" not in state
+    assert calls == []
+    assert sorted(f.name for f in run_directory(tmp_path / ".artifact").iterdir()) == []
+
+
+def test_kernelgen_is_skipped_when_the_model_check_cannot_report(tmp_path, monkeypatch, env_files, good_model):
+    """Without a usable report the prerequisites are not known to have passed, so the export does not run."""
+    calls = []
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", recording_toolkit(calls, tmp_path))
+    monkeypatch.setattr(model_check, "run_process", lambda *args: 139)
+
+    state = run(env_files, *good_model)
+
+    assert state["error"] == "model_check_run"
     assert calls == []
 
 
-@pytest.mark.parametrize(
-    "produced, stage, missing",
-    [
-        pytest.param([], "kernelgen_reference", "model.pt2", id="no_reference"),
-        pytest.param(["model.pt2"], "kernelgen_engine", "model.engine", id="no_engine"),
-    ],
-)
-def test_kernelgen_requires_the_reference_and_the_tensorrt_output(tmp_path, caplog, monkeypatch, produced, stage, missing):
-    """Nothing is submitted to kernelgen without the export's reference and the model check's engine."""
+def test_kernelgen_requires_only_the_reference(tmp_path, caplog, monkeypatch):
+    """Nothing is submitted to kernelgen without the export's reference; the TensorRT engine is not waited for."""
     calls = []
     monkeypatch.setattr(kernelgen_check, "run_toolkit", lambda args, timeout=None: calls.append(args))
     art = tmp_path / ".artifact"
     art.mkdir()
-    for name in produced:
-        (art / name).write_bytes(b"x")
 
     update = kernelgen_check.kernelgen({"run_path": str(art), "config": None})
 
-    assert update["error"] == stage
-    assert missing in update["error_detail"]
-    assert [r.stage for r in error_records(caplog)] == [stage]
+    assert update["error"] == "kernelgen_reference"
+    assert "model.pt2" in update["error_detail"]
+    assert [r.stage for r in error_records(caplog)] == ["kernelgen_reference"]
     assert calls == []
+
+
+def test_kernelgen_runs_without_a_tensorrt_engine(tmp_path, monkeypatch):
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", fake_toolkit)
+    art = tmp_path / ".artifact"
+    art.mkdir()
+    (art / "model.pt2").write_bytes(FAKE_REFERENCE)
+
+    update = kernelgen_check.kernelgen({"run_path": str(art), "config": Config(**CONFIG)})
+
+    assert update == {"kernel_path": str(art / "kernel.py"), "kernelgen_report": FAKE_INSPECT.strip()}
+    assert not hasattr(kernelgen_check, "ENGINE_FILE")
+
+
+# ---------- Independent branches: after the prerequisites, ONNX/TensorRT and PT2/kernelgen each run whatever the other did.
+
+
+def tensorrt_fails(monkeypatch):
+    monkeypatch.setattr(
+        tensorrt_check, "build",
+        lambda onnx_path, inputs: (_ for _ in ()).throw(tensorrt_check.TensorRTBuildError("out of memory while tactic timing")),
+    )
+
+
+def compile_fails(args, timeout=None):
+    if args[:2] == ["kernelgen", "compile"]:
+        return subprocess.CompletedProcess(["yasp-toolkit", *args], 1, stdout="", stderr="worker exploded\n")
+    return fake_toolkit(args)
+
+
+def test_a_tensorrt_failure_still_runs_the_export_and_kernelgen(tmp_path, caplog, monkeypatch, env_files, good_model):
+    calls = []
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", recording_toolkit(calls, tmp_path))
+    tensorrt_fails(monkeypatch)
+
+    state = run(env_files, *good_model)
+
+    assert state["outcome"] == "failure"
+    assert state["tensorrt_error"] == "tensorrt_build"
+    assert state.get("error") is None
+    assert [args[:2] for args, _ in calls] == [["kernelgen", "export"], ["eval", "workers"], ["kernelgen", "compile"], ["eval", "inspect"]]
+    art = run_directory(tmp_path / ".artifact")
+    assert state["kernel_path"] == str(art / "kernel.py")
+    message = state["customer_message"]
+    assert "TensorRT could not build an engine" in message and "out of memory" in message
+    assert f"the kernel is {art / 'kernel.py'}." in message and FAKE_INSPECT.strip() in message
+    assert message.index("TensorRT could not build") < message.index("the kernel is")
+    assert sorted(f.name for f in art.iterdir()) == [
+        "kernel.py", "kernelgen_report.json", "model.onnx", "model.pt2", "model_simplified.onnx",
+    ]
+    assert [r.stage for r in error_records(caplog)] == ["tensorrt_build"]
+
+
+def test_a_kernelgen_failure_keeps_the_tensorrt_results(tmp_path, caplog, monkeypatch, env_files, good_model):
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", compile_fails)
+
+    state = run(env_files, *good_model)
+
+    assert state["outcome"] == "failure"
+    assert state["error"] == "kernelgen_compile"
+    assert "tensorrt_error" not in state
+    assert state["benchmark"]["speedup"] > 0
+    message = state["customer_message"]
+    assert "TensorRT engine build (fp32), and benchmark succeeded." in message
+    assert "Latency per run, TensorRT" in message
+    assert "did not produce a kernel" in message and "worker exploded" in message
+    assert message.index("benchmark succeeded") < message.index("did not produce a kernel")
+    art = run_directory(tmp_path / ".artifact")
+    assert {"model.onnx", "model_simplified.onnx", "model.engine", "benchmark.json", "model.pt2"} <= {f.name for f in art.iterdir()}
+    assert [r.stage for r in error_records(caplog)] == ["kernelgen_compile"]
+
+
+def test_both_failures_are_kept_and_reported(tmp_path, caplog, monkeypatch, env_files, good_model):
+    monkeypatch.setattr(kernelgen_check, "run_toolkit", compile_fails)
+    tensorrt_fails(monkeypatch)
+
+    state = run(env_files, *good_model)
+
+    assert state["outcome"] == "failure"
+    assert state["tensorrt_error"] == "tensorrt_build"
+    assert "out of memory" in state["tensorrt_error_detail"]
+    assert state["error"] == "kernelgen_compile"
+    assert "worker exploded" in state["error_detail"]
+    message = state["customer_message"]
+    assert message.index("TensorRT could not build") < message.index("did not produce a kernel")
+    assert "out of memory" in message and "worker exploded" in message
+    assert [r.stage for r in error_records(caplog)] == ["tensorrt_build", "kernelgen_compile"]
+
+
+def test_a_tensorrt_failure_exits_one_even_when_kernelgen_succeeds(tmp_path, monkeypatch, env_files, good_model, capsys):
+    tensorrt_fails(monkeypatch)
+    config, environments = env_files
+
+    code = main([str(config), *map(str, good_model), "--environments", str(environments)])
+
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "TensorRT could not build" in out and "the kernel is" in out
 
 
 # ---------- The reference export: the documented `yasp-toolkit kernelgen export` on model.py, as a subprocess, output captured.
@@ -423,16 +538,6 @@ def test_export_failures_are_stages_and_stop_before_any_other_toolkit_call(tmp_p
     assert [r.stage for r in error_records(caplog)] == [stage]
     assert [args[:2] for args in calls] == [["kernelgen", "export"]]
     assert capsys.readouterr().out == ""  # the export's output, the user's prints included, never reaches stdout
-
-
-def test_export_is_skipped_when_the_model_check_fails(tmp_path, monkeypatch, env_files):
-    calls = []
-    monkeypatch.setattr(kernelgen_check, "run_toolkit", recording_toolkit(calls, tmp_path))
-
-    state = run(env_files, write_model(tmp_path, TYPO), write_npz(tmp_path, [X]))
-
-    assert state["error"] == "forward"
-    assert calls == []
 
 
 def test_kernelgen_files_are_managed_artifacts():

@@ -84,7 +84,6 @@ EVALUATOR = {
 KERNELGEN = {
     "export_reference": "yasp-toolkit kernelgen export could not export model.py as the kernelgen reference. The exporter's output is below.",
     "kernelgen_reference": "The kernelgen reference (model.pt2) is missing from the artifact directory. Contact support.",
-    "kernelgen_engine": "The TensorRT engine (model.engine) kernelgen waits for is missing from the artifact directory. Contact support.",
     "kernelgen_toolkit": "The yasp-toolkit command is not available. Install yasp-agent as README.md describes.",
     "kernelgen_compile": "The kernelgen optimization did not produce a kernel. The toolkit's output is below; `yasp-toolkit kernelgen get <task id> --wait` shows the job's state.",
     "kernelgen_inspect": "The kernelgen kernel was written, but its report could not be shown with yasp-toolkit eval inspect. The toolkit's output is below.",

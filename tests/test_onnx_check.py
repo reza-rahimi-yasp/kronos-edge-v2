@@ -68,7 +68,7 @@ def test_failure_names_the_stage_and_the_cause(tmp_path, caplog, env_files, sour
     state = run(env_files, write_model(tmp_path, source), write_npz(tmp_path, [X]))
 
     assert state["outcome"] == "failure"
-    assert state["error"] == stage
+    assert state["tensorrt_error"] == stage
     assert fragment in state["customer_message"]
     assert cause in state["customer_message"]
     assert "\x1b[" not in state["customer_message"]
@@ -94,7 +94,7 @@ def test_missing_exporter_is_a_support_failure(tmp_path, monkeypatch, env_files)
     state = run(env_files, write_model(tmp_path, CONV_RELU), write_npz(tmp_path, [X]))
 
     assert state["outcome"] == "failure"
-    assert state["error"] == "onnx_exporter"
+    assert state["tensorrt_error"] == "onnx_exporter"
     assert "support" in state["customer_message"]
     assert "onnxscript" in state["customer_message"]
 
@@ -143,7 +143,7 @@ def test_report_directory_holds_only_the_report(tmp_path, monkeypatch, env_files
 def test_failed_export_writes_no_onnx_file(tmp_path, env_files):
     state = run(env_files, write_model(tmp_path, UNSUPPORTED_OP), write_npz(tmp_path, [X]))
 
-    assert state["error"] == "onnx_convert"
+    assert state["tensorrt_error"] == "onnx_convert"
     assert onnx_files(tmp_path) == []
 
 

@@ -1,6 +1,8 @@
 """Kernelgen checks: export the reference, generate an optimized kernel with Gaia, then show the report it came with.
 
-Run after the model check: kernelgen is a hosted service reached through the
+Run after the model check once its prerequisites (loading the model,
+validating ``input.npz``, the eager forward) have passed, whether or not its
+ONNX/TensorRT branch did: kernelgen is a hosted service reached through the
 ``yasp-toolkit`` command of the yasp-agent package, installed on its own and
 run as a subprocess, never imported. It needs the user's Yasp API key
 (``YASP_API_KEY`` in the environment, or the OS keyring filled by
@@ -43,7 +45,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from kronos_edge.artifacts import ENGINE_FILE, KERNEL_FILE, PT2_FILE
+from kronos_edge.artifacts import KERNEL_FILE, PT2_FILE
 from kronos_edge.artifacts import KERNELGEN_REPORT_FILE as REPORT_FILE
 from kronos_edge.log import get_logger
 from kronos_edge.messages import KERNELGEN as CUSTOMER_MESSAGES
@@ -125,11 +127,6 @@ def kernelgen(state: State) -> State:
         reference = artifacts / PT2_FILE
         if not reference.is_file():
             raise FileNotFoundError(f"{reference} was not written by the export")
-
-        stage = "kernelgen_engine"  # the TensorRT output this step waits for
-        engine = artifacts / ENGINE_FILE
-        if not engine.is_file():
-            raise FileNotFoundError(f"{engine} was not written by the model check")
 
         stage = "kernelgen_compile"
         config = state["config"]
