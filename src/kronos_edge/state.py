@@ -14,7 +14,8 @@ class State(TypedDict, total=False):
     environment: Environment
     model_path: str
     npz_path: str
-    artifacts_path: str
+    artifacts_path: str  # the artifact root
+    run_path: str  # this run's directory under it, where the checks write
     artifacts_dir: str
     precision: str
     threshold: float

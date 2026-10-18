@@ -87,8 +87,8 @@ decisions: do not add file listings, commands, or summaries here.
   equal a registry entry, which the preflight then verifies against this
   environment. Settings (`precision`, `metric`, `threshold`, `eval_routing`)
   are validated by the same schema but never take part in matching; changing
-  a setting re-runs the checks in the same environment and overwrites the
-  artifacts. `config.Config` is the environment schema plus the settings. A
+  a setting re-runs the checks in the same environment into a new run
+  directory. `config.Config` is the environment schema plus the settings. A
   metric is accepted only once it is implemented; the threshold is the
   user's, never a constant in code.
 - Packages `model.py` imports are the user's to install into the environment
@@ -138,15 +138,17 @@ decisions: do not add file listings, commands, or summaries here.
 - The model-check subprocess talks to the workflow only through `report.json`
   in a temporary directory. Never through stdout: the user's model owns
   stdout. Logs go to stderr, which the workflow inherits.
-- Files produced for the user (`.onnx`, later `.engine`) go only to the
-  artifact directory: `.artifact` in the working directory unless
-  `--artifacts` says otherwise, created by the workflow before the model
-  check. Every such file is listed in `artifacts.py`; the workflow deletes
-  those names, and only those, before each run so a stale file never sits
-  next to a fresh one. A name an earlier version wrote stays listed there as
-  retired, deleted but never written, so a carried-over directory is cleaned
-  too. Each node writes its own file as soon as it has it, so
-  a later failure keeps the earlier files. Intermediate models also stay in
+- Files produced for the user (`.onnx`, `.engine`, the kernelgen files) go
+  only to the run directory: a new directory under the artifact root
+  (`.artifact` in the working directory unless `--artifacts` says otherwise),
+  named for the run's UTC start time and created exclusively by the workflow
+  before the model check, with a numeric suffix if the name is taken. It
+  travels in state as `run_path` to the model-check subprocess and the
+  kernelgen nodes. Because every run starts in an empty directory of its own,
+  no stale file sits next to a fresh one, and the workflow deletes nothing:
+  earlier runs and anything else in the root are never touched. Every such
+  file is listed in `artifacts.py`. Each node writes its own file as soon as
+  it has it, so a later failure keeps the earlier files in its run directory. Intermediate models also stay in
   state in memory for the next node.
 - Model-stack packages (`onnx`, `onnxsim`, and the exporter's lazy imports)
   are imported inside the node that needs them, never at module top, so a

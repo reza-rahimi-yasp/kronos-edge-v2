@@ -16,8 +16,9 @@ kernelgen reference with `yasp-toolkit kernelgen export`, confirms your Gaia
 worker for the config's GPU and routing key is registered, and runs
 `yasp-toolkit kernelgen compile`. It prints the benchmark and the kernelgen
 report, or a message saying what to fix. The ONNX files, the engine, the
-benchmark numbers, the reference, the kernel, and its report land in an
-artifact directory.
+benchmark numbers, the reference, the kernel, and its report land in a new
+directory for each run, named for the UTC time it started, under an artifact
+directory.
 
 The same workflow runs natively or inside a container you built from the
 environment's Dockerfile under `docker/`: it checks the environment it finds
@@ -187,8 +188,8 @@ integer inputs are left alone. The eager run always uses the model as you
 wrote it, and the kernelgen reference (`model.pt2`) is exported from
 `model.py` itself, uncast (see "Run the check"). TensorRT builds a
 strongly typed engine, so the engine computes in exactly the types the ONNX
-carries. Changing `precision` and running again rewrites all the files in the
-same artifact directory.
+carries. Changing `precision` and running again writes all the files to a new
+run directory; the earlier run's directory is kept.
 
 `eval_routing` is also a setting. It is the routing key kernelgen's
 evaluations are pinned to (`kernelgen compile --eval-routing`): they go to the
@@ -310,8 +311,8 @@ Eager run, ONNX export, ONNX simplification, TensorRT engine build (fp16), and b
 Latency per run, eager: mean 0.047 ms, median 0.046 ms, p95 0.052 ms.
 Latency per run, TensorRT: mean 0.015 ms, median 0.015 ms, p95 0.017 ms.
 TensorRT is 3.0x faster than eager (median). Cosine similarity: 0.9998 (threshold 0.99).
-The kernelgen optimization succeeded: the kernel is .artifact/kernel.py. Its report, as yasp-toolkit eval inspect shows it:
-.artifact/kernelgen_report.json
+The kernelgen optimization succeeded: the kernel is .artifact/20261017T143005Z/kernel.py. Its report, as yasp-toolkit eval inspect shows it:
+.artifact/20261017T143005Z/kernelgen_report.json
   ...
   speedup: 2.000 (CI 2.000 – 2.010) ✓ converged
   correctness: passed (1 output, shapes ✓, dtypes ✓, values ✓)
@@ -366,8 +367,8 @@ with your config's `gpu` as the target and its in-compile evaluations routed to
 your worker:
 
 ```bash
-yasp-toolkit kernelgen compile --reference .artifact/model.pt2 --gpu-name "<gpu>" \
-    --output .artifact/kernel.py --report .artifact/kernelgen_report.json \
+yasp-toolkit kernelgen compile --reference .artifact/<run>/model.pt2 --gpu-name "<gpu>" \
+    --output .artifact/<run>/kernel.py --report .artifact/<run>/kernelgen_report.json \
     --no-progress --eval-routing <eval_routing>
 ```
 
@@ -383,12 +384,18 @@ job fails, the detail shows the toolkit's output with the task id;
 
 ## Artifact directory
 
-The files the checks produce are written to `.artifact` in the current
-directory. Pass `--artifacts path/to/dir` to use another directory. It is
-created if missing. Each run first deletes the files listed below from a
-previous run, and `kernelgen_eval.json`, which earlier versions of the check wrote,
-and nothing else, so your own files in that directory are safe.
-On a failure, the files produced before it are kept.
+The artifact directory is `.artifact` in the current directory. Pass
+`--artifacts path/to/root` to use another one. It is created if missing. Each
+run writes the files listed below to a new directory in it, named for the UTC
+time the run started in ISO 8601 basic format, for example
+`.artifact/20261017T143005Z/` or `path/to/root/20261017T143005Z/`. If that
+name is already taken, for example by a run that started in the same second,
+the run uses the next free `-2`, `-3`, ... suffix. A run never deletes or
+overwrites anything: earlier run directories, files earlier versions of the
+check wrote straight into the artifact directory, and your own files there are
+left as they are. The success message names the run directory's kernel and
+report, and the log names the run directory when the model check starts. On a
+failure, the files produced before it are kept in that run's directory.
 
 | File | Written by |
 |---|---|
@@ -463,7 +470,7 @@ and dtype of every input, `DEBUG` adds the full traceback of a failure.
 | The evaluators registered for the kernelgen evaluation could not be listed. The toolkit's output is below. | The service could not be reached or rejected the request; the detail shows the toolkit's output. |
 | No Gaia worker advertising your config's gpu is registered under its eval_routing. Deploy one on this machine as README.md describes; the check never starts one. | Deploy the worker as "Deploy the Gaia worker" shows, with `--tag routing=<eval_routing>`, and check that its GPU Name in `yasp-toolkit eval workers` equals your config's `gpu`. |
 | The kernelgen optimization did not produce a kernel. The toolkit's output is below; `yasp-toolkit kernelgen get <task id> --wait` shows the job's state. | The kernelgen job failed, the service could not be reached, or the key was missing or rejected; the detail shows the toolkit's output, including the task id. |
-| The kernelgen kernel was written, but its report could not be shown with yasp-toolkit eval inspect. The toolkit's output is below. | `kernel.py` and `kernelgen_report.json` are in the artifact directory; the detail shows why the toolkit could not render the report. |
+| The kernelgen kernel was written, but its report could not be shown with yasp-toolkit eval inspect. The toolkit's output is below. | `kernel.py` and `kernelgen_report.json` are in the run directory; the detail shows why the toolkit could not render the report. |
 
 ## Run the tests
 

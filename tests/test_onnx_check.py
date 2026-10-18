@@ -7,6 +7,7 @@ import onnx
 import pytest
 import torch
 
+from conftest import run_directory
 from kronos_edge import eager_check, model_check, onnx_check
 from kronos_edge.workflow import run_check
 from test_eager_check import CONV_RELU, X, error_records, run, write_model, write_npz
@@ -117,8 +118,8 @@ def test_export_is_written_to_the_artifact_directory(tmp_path, monkeypatch, env_
     assert isinstance(model, torch.nn.Module)
     assert len(inputs) == 1 and tuple(inputs[0].shape) == X.shape
     assert isinstance(program, torch.onnx.ONNXProgram)
-    assert (tmp_path / ".artifact" / "model.onnx").is_file()
-    onnx.checker.check_model(onnx.load(tmp_path / ".artifact" / "model.onnx"))
+    assert (run_directory(tmp_path / ".artifact") / "model.onnx").is_file()
+    onnx.checker.check_model(onnx.load(run_directory(tmp_path / ".artifact") / "model.onnx"))
 
 
 def test_report_directory_holds_only_the_report(tmp_path, monkeypatch, env_files):

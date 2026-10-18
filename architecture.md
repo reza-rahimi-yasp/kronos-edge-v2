@@ -18,9 +18,12 @@ run as a subprocess with its output captured; the repository orchestrates
 Gaia and implements none of it. The workflow process never imports the model
 stack: torch, TensorRT, and the user's model live in the subprocesses. The
 check never starts, stops, or removes a Gaia worker, never runs `docker`, and
-mints no key. The files the checks produce for the user go to the artifact
-directory; the export's `model.pt2` and the model check's `model.engine` in it
-are what the `kernelgen` node depends on.
+mints no key. The files the checks produce for the user go to a new run
+directory under the artifact root, named for the run's UTC start time
+(`.artifact/20261017T143005Z/` by default); its path travels in state as
+`run_path`, and the export's `model.pt2` and the model check's `model.engine`
+in it are what the `kernelgen` node depends on. Earlier run directories are
+never touched.
 
 ```mermaid
 stateDiagram-v2
@@ -82,8 +85,10 @@ Every node either advances the state or records a failure stage in
   once with the entry's Dockerfile as the recipe, and requires `yasp-toolkit`
   on the path. Stages: `preflight_probe`, `environment_mismatch`,
   `kernelgen_toolkit`.
-- `run_model_check` (`model_check.py`): creates the artifact directory,
-  deletes the managed files listed in `artifacts.py` from a previous run, runs
+- `run_model_check` (`model_check.py`): creates the artifact root if missing
+  and, exclusively, this run's directory in it, named for the UTC start time
+  (`20261017T143005Z`, or the next free `-2`, `-3`, ... suffix if the name is
+  taken), and records it as `run_path`; deletes nothing. Runs
   the model-check graph as `python -m kronos_edge.eager_check` with this
   interpreter, the package's source directory leading `PYTHONPATH`, the Yasp
   credentials (`YASP_*`, `REGISTRY_KEY`) removed from its environment and
@@ -93,7 +98,7 @@ Every node either advances the state or records a failure stage in
   `model_check_run`; a failure reported by the subprocess is passed through
   under its own stage.
 - `export_reference` (`kernelgen_check.py`): runs `yasp-toolkit kernelgen
-  export --input model.py --output <artifacts>/model.pt2`
+  export --input model.py --output <run_path>/model.pt2`
   (https://compile.yasp.ai/help/reference/kernelgen/#export) as a subprocess
   with its output captured, since the user's model prints on it, and without
   the Yasp credentials or the keyring, since it runs the user's model; the
@@ -111,7 +116,7 @@ Every node either advances the state or records a failure stage in
   submitted. Nothing is started, stopped, or minted. Stages:
   `evaluator_inventory`, `evaluator_missing` (plus `kernelgen_toolkit`).
 - `kernelgen` (`kernelgen_check.py`): requires `model.pt2` and `model.engine`
-  in the artifact directory, then runs `yasp-toolkit kernelgen compile` with the
+  in the run directory, then runs `yasp-toolkit kernelgen compile` with the
   reference alone (no `--source`), the config's `gpu` as target, and the
   config's `eval_routing` for the in-compile evaluations; the command polls the
   job until it is terminal. Requires `kernel.py` and `kernelgen_report.json`
@@ -153,7 +158,7 @@ Run by `python -m kronos_edge.eager_check` with `--device cuda` and the
   `onnx_simplifier`, `onnx_simplify`, `onnx_simplified_invalid`,
   `onnx_simplified_save`.
 - `build_engine` (`tensorrt_check.py`): parses `model_simplified.onnx` from
-  the artifact directory into a strongly typed TensorRT network, so the
+  the run directory into a strongly typed TensorRT network, so the
   engine's precision is the ONNX's, pins shape inputs and dynamic dimensions
   to the user's inputs with an optimization profile, builds a serialized
   engine, keeps the bytes in state, and writes `model.engine`. TensorRT's own log is forwarded to ours

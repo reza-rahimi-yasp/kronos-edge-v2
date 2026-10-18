@@ -5,11 +5,12 @@ the tests here cover the node around it and the real import failure.
 """
 
 import os
+from pathlib import Path
 
 import onnx
 import pytest
 
-from conftest import CONFIG, FAKE_ENGINE, write_yaml
+from conftest import CONFIG, FAKE_ENGINE, run_directory, write_yaml
 from kronos_edge import eager_check, tensorrt_check
 from kronos_edge.workflow import run_check
 from test_eager_check import CONV_RELU, X, error_records, write_model, write_npz
@@ -39,7 +40,7 @@ def test_engine_is_built_from_the_simplified_model_and_named_in_the_message(tmp_
     assert f"TensorRT engine build ({precision})" in state["customer_message"] and "succeeded" in state["customer_message"]
     assert seen["onnx_path"].name == "model_simplified.onnx" and seen["onnx_path"].is_file()
     assert [tuple(t.shape) for t in seen["inputs"]] == [X.shape]  # the user's inputs, for shape-input profiles
-    assert (tmp_path / ".artifact" / "model.engine").read_bytes() == FAKE_ENGINE
+    assert (run_directory(tmp_path / ".artifact") / "model.engine").read_bytes() == FAKE_ENGINE
 
 
 def test_engine_bytes_stay_in_state_for_the_next_node(good_model, artifacts):
@@ -50,18 +51,20 @@ def test_engine_bytes_stay_in_state_for_the_next_node(good_model, artifacts):
     assert (artifacts / "model.engine").read_bytes() == FAKE_ENGINE
 
 
-def test_changing_precision_overwrites_the_engine(tmp_path, monkeypatch, env_files):
+def test_changing_precision_writes_a_new_engine_and_keeps_the_old_one(tmp_path, monkeypatch, env_files):
     """The builder sees the ONNX of the new precision; the fake echoes the input dtype it was given."""
     monkeypatch.setattr(
         tensorrt_check, "build",
         lambda onnx_path, inputs: onnx.TensorProto.DataType.Name(onnx.load(onnx_path).graph.input[0].type.tensor_type.elem_type).encode(),
     )
-    engine = tmp_path / ".artifact" / "model.engine"
 
-    assert run_with_precision(tmp_path, env_files, "fp32")["outcome"] == "success"
-    assert engine.read_bytes() == b"FLOAT"
-    assert run_with_precision(tmp_path, env_files, "fp16")["outcome"] == "success"
-    assert engine.read_bytes() == b"FLOAT16"
+    fp32 = run_with_precision(tmp_path, env_files, "fp32")
+    fp16 = run_with_precision(tmp_path, env_files, "fp16")
+
+    assert fp32["outcome"] == fp16["outcome"] == "success"
+    assert fp32["run_path"] != fp16["run_path"]
+    assert (Path(fp32["run_path"]) / "model.engine").read_bytes() == b"FLOAT"
+    assert (Path(fp16["run_path"]) / "model.engine").read_bytes() == b"FLOAT16"
 
 
 @pytest.mark.parametrize(
@@ -90,7 +93,7 @@ def test_failure_stages(tmp_path, caplog, monkeypatch, env_files, build, stage, 
     assert state["error"] == stage
     assert fragment in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == [stage]
-    assert sorted(f.name for f in (tmp_path / ".artifact").iterdir()) == ["model.onnx", "model_simplified.onnx"]  # no engine, no benchmark
+    assert sorted(f.name for f in run_directory(tmp_path / ".artifact").iterdir()) == ["model.onnx", "model_simplified.onnx"]  # no engine, no benchmark
 
 
 def test_missing_tensorrt_is_a_support_failure(monkeypatch, caplog, good_model, artifacts, tensorrt_stub):

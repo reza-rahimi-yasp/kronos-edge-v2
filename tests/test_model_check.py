@@ -8,12 +8,13 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 import torch
 
-from conftest import GOOD_MODEL
+from conftest import GOOD_MODEL, run_directory
 from kronos_edge import artifacts, eager_check, model_check, onnxsim_check
 
 BENCHMARK = {
@@ -24,7 +25,7 @@ BENCHMARK = {
     "threshold": 0.99,
     "values": [0.9998],
 }
-from kronos_edge.workflow import run_check
+from kronos_edge.workflow import main, run_check
 
 # The credentials the README and .env.example have the user export: the API key, its deprecated alias, the registry key.
 CREDENTIALS = ("YASP_API_KEY", "YASP_API_TOKEN", "REGISTRY_KEY")
@@ -85,58 +86,90 @@ def test_the_subprocess_imports_this_package(monkeypatch):
     assert model_check.process_environment()["PYTHONPATH"] == str(SRC)
 
 
-def test_rerun_clears_managed_files_but_keeps_the_users_own(monkeypatch, tmp_path, env_files, good_model):
-    """A second run in the same directory must not leave the first run's outputs next to the new ones."""
+ALL_FILES = [
+    "benchmark.json", "kernel.py", "kernelgen_report.json",
+    "model.engine", "model.onnx", "model.pt2", "model_simplified.onnx",
+]
+
+
+def clock(monkeypatch, *times):
+    """Each run directory created from here on is named for the next of `times` (UTC)."""
+    starts = iter(datetime(2026, 10, 17, *t, tzinfo=timezone.utc) for t in times)
+    monkeypatch.setattr(artifacts, "utc_now", lambda: next(starts))
+
+
+def test_successive_runs_keep_the_earlier_run_directories(monkeypatch, tmp_path, env_files, good_model):
+    """A second run writes to a new directory; the first run's files and the user's own stay exactly as they were."""
     config, environments = env_files
     model, npz = good_model
-    art = tmp_path / ".artifact"
-    first = run_check(config, model, npz, environments_path=environments, artifacts_path=art)
+    clock(monkeypatch, (14, 30, 5), (14, 31, 0))
+    first = run_check(config, model, npz, environments_path=environments)
     assert first["outcome"] == "success"
-    assert sorted(f.name for f in art.iterdir()) == [
-        "benchmark.json", "kernel.py", "kernelgen_report.json",
-        "model.engine", "model.onnx", "model.pt2", "model_simplified.onnx",
-    ]
+    art = tmp_path / ".artifact"
+    first_run = art / "20261017T143005Z"
+    assert sorted(f.name for f in first_run.iterdir()) == ALL_FILES
+    before = {f.name: f.read_bytes() for f in first_run.iterdir()}
     (art / "notes.txt").write_text("mine")
-    (art / "model.onnx.data").write_bytes(b"stale companion")
 
     def simplify_fails(model):
         raise RuntimeError("second run cannot simplify")
 
     monkeypatch.setattr(onnxsim_check, "simplify", simplify_fails)
 
-    second = run_check(config, model, npz, environments_path=environments, artifacts_path=art)
+    second = run_check(config, model, npz, environments_path=environments)
 
     assert second["error"] == "onnx_simplify"
-    assert sorted(f.name for f in art.iterdir()) == ["model.onnx", "notes.txt"]
+    assert sorted(f.name for f in art.iterdir()) == ["20261017T143005Z", "20261017T143100Z", "notes.txt"]
+    assert {f.name: f.read_bytes() for f in first_run.iterdir()} == before
+    # The failed run keeps what it produced before the failure, and nothing of the first run.
+    assert sorted(f.name for f in (art / "20261017T143100Z").iterdir()) == ["model.onnx"]
 
 
-def test_a_run_in_an_artifact_directory_from_an_older_version_clears_its_evaluation_report(monkeypatch, tmp_path, env_files, good_model):
-    """The retired kernelgen_eval.json of an earlier run must not sit next to this run's files, even when this run fails."""
+def test_two_runs_in_the_same_second_do_not_share_a_directory(monkeypatch, tmp_path, env_files, good_model):
+    config, environments = env_files
+    clock(monkeypatch, (14, 30, 5), (14, 30, 5))
+
+    first = run_check(config, *good_model, environments_path=environments)
+    second = run_check(config, *good_model, environments_path=environments)
+
+    art = tmp_path / ".artifact"
+    assert first["kernel_path"] == str((art / "20261017T143005Z" / "kernel.py").resolve())
+    assert second["kernel_path"] == str((art / "20261017T143005Z-2" / "kernel.py").resolve())
+    for run in ("20261017T143005Z", "20261017T143005Z-2"):
+        assert sorted(f.name for f in (art / run).iterdir()) == ALL_FILES
+
+
+def test_a_run_leaves_files_in_the_artifact_root_alone(monkeypatch, tmp_path, env_files, good_model):
+    """Files an older version wrote straight into the root, and the user's own, are neither read nor removed."""
     config, environments = env_files
     art = tmp_path / ".artifact"
     art.mkdir()
-    (art / "kernelgen_eval.json").write_text('{"opt_1": {"speedup": 2.0}}')
-    (art / "notes.txt").write_text("mine")
+    legacy = {name: b"older version" for name in (*artifacts.MANAGED_FILES, "kernelgen_eval.json", "notes.txt")}
+    for name, data in legacy.items():
+        (art / name).write_bytes(data)
     fake_process(monkeypatch, None, 1)
 
     state = run_check(config, *good_model, environments_path=environments, artifacts_path=art)
 
     assert state["error"] == "model_check_run"
-    assert sorted(f.name for f in art.iterdir()) == ["notes.txt"]
+    assert {f.name: f.read_bytes() for f in art.iterdir() if f.is_file()} == legacy
+    assert list(run_directory(art).iterdir()) == []
 
 
-def test_managed_files_are_cleared_even_if_the_subprocess_fails_to_start(monkeypatch, tmp_path, env_files, good_model):
+def test_a_custom_artifact_root_gets_the_run_directory(monkeypatch, tmp_path, env_files, good_model, capsys):
+    """`--artifacts path/to/root` puts the run in path/to/root/<timestamp>, and the success message names it."""
     config, environments = env_files
-    art = tmp_path / ".artifact"
-    art.mkdir()
-    for name in artifacts.MANAGED_FILES:
-        (art / name).write_bytes(b"stale")
-    fake_process(monkeypatch, None, 1)
+    model, npz = good_model
+    clock(monkeypatch, (14, 30, 5))
+    root = tmp_path / "path" / "to" / "root"
 
-    state = run_check(config, *good_model, environments_path=environments, artifacts_path=art)
+    code = main([str(config), str(model), str(npz), "--environments", str(environments), "--artifacts", str(root)])
 
-    assert state["error"] == "model_check_run"
-    assert list(art.iterdir()) == []
+    assert code == 0
+    run = root / "20261017T143005Z"
+    assert sorted(f.name for f in run.iterdir()) == ALL_FILES
+    assert f"the kernel is {(run / 'kernel.py').resolve()}." in capsys.readouterr().out
+    assert not (tmp_path / ".artifact").exists()
 
 
 @pytest.mark.parametrize(
@@ -167,10 +200,11 @@ def test_missing_package_reaches_the_report(tmp_path, good_model, artifacts, blo
     assert blocked in report["error_detail"]
 
 
-def test_artifact_directory_is_created_before_the_subprocess_runs(monkeypatch, tmp_path, env_files, good_model):
+def test_the_run_directory_is_created_before_the_subprocess_runs_and_handed_to_it(monkeypatch, tmp_path, env_files, good_model):
     seen = {}
 
     def fake(model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level):
+        seen["dir"] = Path(artifacts_dir)
         seen["exists"] = Path(artifacts_dir).is_dir()
         for name in ("model.engine",):  # what the kernelgen step waits for besides the export's reference
             (Path(artifacts_dir) / name).write_bytes(b"x")
@@ -184,7 +218,8 @@ def test_artifact_directory_is_created_before_the_subprocess_runs(monkeypatch, t
     state = run_check(config, *good_model, environments_path=environments, artifacts_path=art)
 
     assert state["outcome"] == "success"
-    assert seen["exists"] and art.is_dir()
+    assert seen["exists"] and seen["dir"] == run_directory(art)
+    assert state["run_path"] == str(seen["dir"])
 
 
 def test_a_subprocess_that_cannot_start_is_reported(monkeypatch, caplog, env_files, good_model):

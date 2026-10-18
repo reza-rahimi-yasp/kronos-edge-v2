@@ -3,6 +3,7 @@
 import onnx
 import pytest
 
+from conftest import run_directory
 from kronos_edge import eager_check, onnxsim_check
 from test_eager_check import CONV_RELU, X, error_records, run, write_model, write_npz
 
@@ -47,7 +48,7 @@ def test_failure_stages(tmp_path, caplog, monkeypatch, env_files, simplify, stag
     assert state["error"] == stage
     assert fragment in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == [stage]
-    assert sorted(f.name for f in (tmp_path / ".artifact").iterdir()) == ["model.onnx"]
+    assert sorted(f.name for f in run_directory(tmp_path / ".artifact").iterdir()) == ["model.onnx"]
 
 
 def test_large_simplified_model_is_saved_with_external_data(monkeypatch, good_model, artifacts):

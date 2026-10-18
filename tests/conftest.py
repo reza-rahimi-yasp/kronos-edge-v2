@@ -54,6 +54,13 @@ def get_inputs():
 """
 
 
+def run_directory(root):
+    """The one run directory a single run created under the artifact root."""
+    runs = [p for p in Path(root).iterdir() if p.is_dir()]
+    assert len(runs) == 1, f"expected one run directory under {root}, found {runs}"
+    return runs[0]
+
+
 def write_yaml(path, data):
     path.write_text(yaml.safe_dump(data))
     return path
@@ -199,7 +206,7 @@ def env_files(tmp_path):
 
 @pytest.fixture
 def artifacts(tmp_path):
-    """An existing artifact directory, as the model-check subprocess sees the one the workflow created."""
+    """An existing run directory, as the model-check subprocess sees the one the workflow created."""
     path = tmp_path / "art"
     path.mkdir()
     return path

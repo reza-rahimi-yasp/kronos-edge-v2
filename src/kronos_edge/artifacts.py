@@ -1,14 +1,15 @@
-"""The files the checks write for the user, and the host-side cleanup between runs.
+"""The files the checks write for the user, and the run directory each run writes them to.
 
-No heavy imports: the workflow loads this to clear the artifact directory
-before the model check starts. Every file a node writes, in the model-check
-subprocess, by the toolkit, or in the workflow, is listed here, so a rerun in
-the same directory never shows a stale file next to a fresh one. Files an
-earlier version wrote and this one no longer does are cleared too, so an
-artifact directory carried over from that version does not keep them. Files
-the user put there themselves are never touched.
+No heavy imports: the workflow loads this to create the run directory before
+the model check starts. Every run writes into a new directory under the
+artifact root, named for the UTC time the run started, so a run never shows a
+stale file next to a fresh one and never touches an earlier run's directory or
+anything else in the root. Every file a node writes, in the model-check
+subprocess, by the toolkit, or in the workflow, is listed here.
 """
 
+import itertools
+from datetime import datetime, timezone
 from pathlib import Path
 
 EXPORTED_FILE = "model.onnx"
@@ -22,15 +23,33 @@ MANAGED_FILES = (
     EXPORTED_FILE, SIMPLIFIED_FILE, ENGINE_FILE, BENCHMARK_FILE,
     PT2_FILE, KERNEL_FILE, KERNELGEN_REPORT_FILE,
 )
-# Written by earlier versions, never by this one: cleared, not produced or read.
-RETIRED_FILES = ("kernelgen_eval.json",)
 
 # Weights above the protobuf limit go to a companion file with this suffix.
 EXTERNAL_DATA_SUFFIX = ".data"
 
 
-def clear(directory) -> None:
-    """Remove the managed and retired files and their external-data companions; leave everything else."""
-    for name in (*MANAGED_FILES, *RETIRED_FILES):
-        for path in (Path(directory) / name, Path(directory) / f"{name}{EXTERNAL_DATA_SUFFIX}"):
-            path.unlink(missing_ok=True)
+# A run directory's name: the UTC time the run started, ISO 8601 basic format.
+RUN_NAME_FORMAT = "%Y%m%dT%H%M%SZ"
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def create_run_directory(root) -> Path:
+    """Create the root if missing and a new, empty directory in it for this run; return the run directory.
+
+    The name is the run's UTC start time. It is created exclusively: if the name
+    is taken, by a run that started in the same second or by anything else, the
+    next free ``-2``, ``-3``, ... suffix is used, so an existing path is never reused.
+    """
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    stamp = utc_now().astimezone(timezone.utc).strftime(RUN_NAME_FORMAT)
+    for n in itertools.count(1):
+        path = root / (stamp if n == 1 else f"{stamp}-{n}")
+        try:
+            path.mkdir()
+        except FileExistsError:
+            continue
+        return path

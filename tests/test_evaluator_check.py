@@ -10,7 +10,7 @@ import subprocess
 
 import pytest
 
-from conftest import CONFIG, evaluator_listing, fake_toolkit
+from conftest import CONFIG, evaluator_listing, fake_toolkit, run_directory
 from kronos_edge import evaluator_check, kernelgen_check
 from test_eager_check import TYPO, X, error_records, run, write_model, write_npz
 from test_kernelgen_check import failing_toolkit, option
@@ -69,7 +69,7 @@ def test_without_an_exact_match_the_check_stops_before_kernelgen(tmp_path, monke
     assert "README.md" in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == ["evaluator_missing"]
     assert commands(calls) == [["kernelgen", "export"], ["eval", "workers"]]
-    assert not (tmp_path / ".artifact" / "kernel.py").exists()
+    assert not (run_directory(tmp_path / ".artifact") / "kernel.py").exists()
 
 
 @pytest.mark.parametrize(
@@ -105,7 +105,7 @@ def test_listing_failures_are_stages_and_submit_nothing(tmp_path, monkeypatch, c
     assert fragment in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == [stage]
     assert [(args[:2], timeout) for args, timeout in calls] == [(["kernelgen", "export"], None), (["eval", "workers"], evaluator_check.LISTING_TIMEOUT_S)]
-    assert not (tmp_path / ".artifact" / "kernel.py").exists()
+    assert not (run_directory(tmp_path / ".artifact") / "kernel.py").exists()
 
 
 def test_nothing_is_listed_when_the_model_check_fails(tmp_path, monkeypatch, env_files):
