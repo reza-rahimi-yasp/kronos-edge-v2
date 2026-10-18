@@ -51,8 +51,8 @@ decisions: do not add file listings, commands, or summaries here.
   workers`, `kernelgen compile`, `eval inspect`) keep the full environment
   they authenticate with. This withholds the credentials, it is not a
   sandbox: the model still runs as the user. The `kernelgen` node requires
-  the export's `model.pt2` and the model check's `model.engine` before it
-  starts. The toolkit can exit
+  the export's `model.pt2` before it starts, and not the TensorRT engine. The
+  toolkit can exit
   0 after an early error, so a node trusts the files it asked for, not the
   exit code.
 - The kernelgen reference is produced by the documented `yasp-toolkit
@@ -128,6 +128,13 @@ decisions: do not add file listings, commands, or summaries here.
   must reach the threshold.
 - The model check's success report must carry the benchmark; the workflow
   refuses a success without one.
+- Loading the model, validating `input.npz`, and the eager forward are
+  prerequisites: if one fails, or the model check leaves no usable report,
+  neither the PT2 export nor any later step runs. Past them, the ONNX/TensorRT
+  branch and the PT2/kernelgen branch are independent and run in that order:
+  an ONNX/TensorRT failure is kept in `tensorrt_error` and kernelgen still
+  runs; a kernelgen failure keeps the ONNX/TensorRT files and benchmark. Either
+  failure fails the run, and the message reports both branches.
 - Customer-facing text lives only in `messages.py`, one table per check,
   keyed by stage. Stage names are one flat namespace across all checks;
   `messages.merge()` and a test reject duplicates, and every `stage = "..."`

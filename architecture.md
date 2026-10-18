@@ -7,8 +7,15 @@ native or a container built from the entry's Dockerfile, is that entry and has
 `yasp-toolkit` on the path. It then runs the model-check graph as a
 subprocess of the same interpreter; that graph writes `report.json` to a
 temporary directory and the workflow merges it into its own state, so
-`failure` picks the customer message the same way for both graphs. Once the
-model check has succeeded, the workflow runs the documented `yasp-toolkit
+`failure` picks the customer message the same way for both graphs. The model
+check's prerequisites (loading the model, validating `input.npz`, the eager
+forward) gate everything after them. Past them, the check has two independent
+branches, run in this order: the ONNX/TensorRT branch inside the model check,
+then the kernelgen branch. A failure in the first is kept in `tensorrt_error`
+and `tensorrt_error_detail` and the kernelgen branch still runs; a kernelgen
+failure, in `error` and `error_detail`, keeps the first branch's files and
+benchmark. Either failure fails the run, and the message reports both
+branches. The kernelgen branch runs the documented `yasp-toolkit
 kernelgen export` on the user's `model.py` to write the kernelgen reference,
 confirms with `yasp-toolkit eval workers` that the user's persistent Gaia
 worker for the config's GPU and routing key is registered, and runs
@@ -21,8 +28,8 @@ check never starts, stops, or removes a Gaia worker, never runs `docker`, and
 mints no key. The files the checks produce for the user go to a new run
 directory under the artifact root, named for the run's UTC start time
 (`.artifact/20261017T143005Z/` by default); its path travels in state as
-`run_path`, and the export's `model.pt2` and the model check's `model.engine`
-in it are what the `kernelgen` node depends on. Earlier run directories are
+`run_path`, and the export's `model.pt2` in it is what the `kernelgen` node
+depends on; it does not wait for `model.engine`. Earlier run directories are
 never touched.
 
 ```mermaid
@@ -34,14 +41,14 @@ stateDiagram-v2
     match_environment --> failure : error
     preflight --> run_model_check : ok (this environment is the entry)
     preflight --> failure : error
-    run_model_check --> export_reference : ok (model.engine)
-    run_model_check --> failure : error
+    run_model_check --> export_reference : ok, or the ONNX/TensorRT branch failed (tensorrt_error)
+    run_model_check --> failure : error (a prerequisite failed, or no usable report)
     export_reference --> verify_evaluator : ok (model.pt2)
     export_reference --> failure : error
     verify_evaluator --> kernelgen : ok (worker registered)
     verify_evaluator --> failure : error
-    kernelgen --> success : ok (kernel.py, report)
-    kernelgen --> failure : error
+    kernelgen --> success : ok (kernel.py, report) and no tensorrt_error
+    kernelgen --> failure : error or tensorrt_error
     success --> [*]
     failure --> [*]
 
@@ -66,6 +73,10 @@ stateDiagram-v2
 
 Every node either advances the state or records a failure stage in
 `error` and `error_detail`; `route_on_error` sends any failure to `failure`.
+The one exception is a failure of the ONNX/TensorRT branch, which
+`run_model_check` records in `tensorrt_error` and `tensorrt_error_detail` so
+the kernelgen branch still runs; after `kernelgen`, either kind of failure
+routes to `failure`.
 
 ## Workflow graph
 
@@ -96,7 +107,12 @@ Every node either advances the state or records a failure stage in
   and log level on the command line, then validates `report.json` from a
   temporary directory and requires the exit code to agree with it. Stage:
   `model_check_run`; a failure reported by the subprocess is passed through
-  under its own stage.
+  under its own stage: in `error` for a prerequisite stage (loading the model,
+  validating the inputs, the eager forward), which stops the run, and in
+  `tensorrt_error` for a stage of the ONNX/TensorRT branch (ONNX export,
+  onnxsim, engine build, benchmark), after which the kernelgen branch still
+  runs. A `model_check_run` failure does not show that the prerequisites
+  passed, so it stops the run too.
 - `export_reference` (`kernelgen_check.py`): runs `yasp-toolkit kernelgen
   export --input model.py --output <run_path>/model.pt2`
   (https://compile.yasp.ai/help/reference/kernelgen/#export) as a subprocess
@@ -115,19 +131,22 @@ Every node either advances the state or records a failure stage in
   with a routing tag; without a match the check stops before any job is
   submitted. Nothing is started, stopped, or minted. Stages:
   `evaluator_inventory`, `evaluator_missing` (plus `kernelgen_toolkit`).
-- `kernelgen` (`kernelgen_check.py`): requires `model.pt2` and `model.engine`
-  in the run directory, then runs `yasp-toolkit kernelgen compile` with the
+- `kernelgen` (`kernelgen_check.py`): requires `model.pt2` in the run
+  directory, then runs `yasp-toolkit kernelgen compile` with the
   reference alone (no `--source`), the config's `gpu` as target, and the
   config's `eval_routing` for the in-compile evaluations; the command polls the
   job until it is terminal. Requires `kernel.py` and `kernelgen_report.json`
   afterwards (the toolkit can exit 0 after an early error), then runs
   `yasp-toolkit eval inspect --file kernelgen_report.json` and keeps its
   rendering in `kernelgen_report` for the success message. No field of the
-  report is read. Stages: `kernelgen_reference`, `kernelgen_engine`,
+  report is read. Stages: `kernelgen_reference`,
   `kernelgen_toolkit`, `kernelgen_compile`, `kernelgen_inspect`.
 - `success` / `failure` (`workflow.py`): set `outcome` and the
   `customer_message`: the benchmark numbers and the inspected kernelgen report
-  on success, or the message looked up by stage in `messages.py`.
+  on success. On failure, each branch's result in order: the benchmark or the
+  ONNX/TensorRT failure, the kernelgen kernel if one was produced, then the
+  failure in `error`, each failure as the message looked up by stage in
+  `messages.py` with its detail.
 
 ## Model-check graph
 

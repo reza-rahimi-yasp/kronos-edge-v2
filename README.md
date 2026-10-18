@@ -14,8 +14,11 @@ onnxsim, builds a TensorRT engine at the precision you ask for, benchmarks the
 engine against eager mode, and checks their outputs agree. It then exports the
 kernelgen reference with `yasp-toolkit kernelgen export`, confirms your Gaia
 worker for the config's GPU and routing key is registered, and runs
-`yasp-toolkit kernelgen compile`. It prints the benchmark and the kernelgen
-report, or a message saying what to fix. The ONNX files, the engine, the
+`yasp-toolkit kernelgen compile`. Loading the model, validating the inputs, and
+the forward pass must succeed first; after them the TensorRT path and the
+kernelgen path are independent, so one failing does not stop the other. It
+prints the benchmark and the kernelgen report, or a message saying what to fix
+next to whatever succeeded. The ONNX files, the engine, the
 benchmark numbers, the reference, the kernel, and its report land in a new
 directory for each run, named for the UTC time it started, under an artifact
 directory.
@@ -336,7 +339,16 @@ values as a shape, for example `x.reshape(shape.tolist())`, the engine is
 built for exactly the values in your `input.npz`. Engine builds take seconds
 for small models and can take minutes for large ones; there is no timeout.
 
-Once the engine is built, the check exports the kernelgen reference with the
+Once loading the model, validating `input.npz`, and the forward pass have
+succeeded, the check runs two independent paths, in this order: the ONNX
+export, simplification, TensorRT engine build, and benchmark above, then the
+kernelgen steps below. If the TensorRT path fails, the kernelgen steps still
+run; if they fail, the TensorRT path's files and benchmark are kept. Either
+failure fails the check, and its message shows both paths' results. If one of
+the three first steps fails, nothing after it runs: no TensorRT path, no
+kernelgen reference.
+
+The kernelgen path exports the kernelgen reference with the
 documented
 [`yasp-toolkit kernelgen export`](https://compile.yasp.ai/help/reference/kernelgen/#export)
 on your `model.py`, run as a command with its output captured. It builds
@@ -411,12 +423,26 @@ When a model's weights exceed the 2 GB protobuf limit they are stored next to
 the `.onnx` file in a companion `.data` file of the same name, for example
 `model.onnx.data`. Keep the two files together.
 
-and exits with code 0. On failure it prints a message naming the problem,
-followed by the underlying exception, and exits with code 1. For example:
+On success the check exits with code 0. On failure it prints a message naming
+the problem, followed by the underlying exception, and exits with code 1. For
+example:
 
 ```
 Your model cannot be run through eager mode. Either fix it or contact support.
 AttributeError: 'Model' object has no attribute 'relo'
+```
+
+When only one of the two paths fails, the message shows the other path's
+result as well, the TensorRT path first: a failed engine build is followed by
+the kernelgen kernel and its report, and a failed kernelgen job follows the
+benchmark. When both fail, both failures are shown, each with its detail. For
+example:
+
+```
+TensorRT could not build an engine from the model. The errors it reported are below.
+TensorRTBuildError: ...
+The kernelgen optimization succeeded: the kernel is .artifact/20261017T143005Z/kernel.py. Its report, as yasp-toolkit eval inspect shows it:
+...
 ```
 
 Log lines go to stderr, including the ones from the model-check subprocess. Pick
@@ -466,7 +492,6 @@ and dtype of every input, `DEBUG` adds the full traceback of a failure.
 | The TensorRT engine's outputs do not match the eager outputs within the threshold in config.yaml. | The detail names each output below the threshold with its value. Lower the threshold if the gap is acceptable for your model, or use `fp32`. |
 | yasp-toolkit kernelgen export could not export model.py as the kernelgen reference. The exporter's output is below. | The documented exporter could not import, trace, or save your model, for example a package missing from the toolkit's environment or a branch on a tensor value. If you cannot fix it, send the output (and `model.py` if you can share it) to support@yasp.ai, as the docs ask. |
 | The kernelgen reference (model.pt2) is missing from the artifact directory. Contact support. | The export reported success without writing the reference. |
-| The TensorRT engine (model.engine) kernelgen waits for is missing from the artifact directory. Contact support. | The model check reported success without writing the engine. |
 | The evaluators registered for the kernelgen evaluation could not be listed. The toolkit's output is below. | The service could not be reached or rejected the request; the detail shows the toolkit's output. |
 | No Gaia worker advertising your config's gpu is registered under its eval_routing. Deploy one on this machine as README.md describes; the check never starts one. | Deploy the worker as "Deploy the Gaia worker" shows, with `--tag routing=<eval_routing>`, and check that its GPU Name in `yasp-toolkit eval workers` equals your config's `gpu`. |
 | The kernelgen optimization did not produce a kernel. The toolkit's output is below; `yasp-toolkit kernelgen get <task id> --wait` shows the job's state. | The kernelgen job failed, the service could not be reached, or the key was missing or rejected; the detail shows the toolkit's output, including the task id. |
