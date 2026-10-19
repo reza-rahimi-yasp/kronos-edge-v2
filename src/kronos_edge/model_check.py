@@ -8,6 +8,15 @@ new run directory under the artifact root, which later nodes find in
 directory leading ``PYTHONPATH``, so it runs the same code from any working
 directory; it is the environment the preflight verified, less the Yasp
 credentials, which the user's model never sees.
+
+A failure while loading the model, validating ``input.npz``, or running the
+eager forward stops the workflow. A failure in the ONNX/TensorRT branch after
+them is kept in ``tensorrt_error`` instead, so the kernelgen branch still runs.
+The subprocess creates the prerequisites file before that branch starts; if it
+then leaves no usable report (it crashed, or was killed), that too is an
+ONNX/TensorRT branch failure, ``model_check_crash``. Without that file, an
+unusable report is ``model_check_run``: the prerequisites are not known to have
+passed, so the workflow stops.
 """
 
 import os
@@ -29,7 +38,10 @@ logger = get_logger(__name__)
 
 DEVICE = "cuda"
 REPORT_FILE = "report.json"
+PREREQUISITES_FILE = "prerequisites_passed"
 SOURCE_DIR = Path(__file__).resolve().parents[1]
+# The stages after the eager forward: the ONNX/TensorRT branch, independent of the kernelgen branch.
+TENSORRT_BRANCH = ONNX | ONNXSIM | TENSORRT | BENCHMARK
 
 
 class Latency(BaseModel):
@@ -72,7 +84,8 @@ def build_command(
 ) -> list[str]:
     return [
         sys.executable, "-m", "kronos_edge.eager_check", str(Path(model_path).resolve()), str(Path(npz_path).resolve()),
-        "--report", str(Path(report_dir).resolve() / REPORT_FILE), "--artifacts", str(Path(artifacts_dir).resolve()),
+        "--report", str(Path(report_dir).resolve() / REPORT_FILE),
+        "--prerequisites", str(Path(report_dir).resolve() / PREREQUISITES_FILE), "--artifacts", str(Path(artifacts_dir).resolve()),
         "--precision", precision, "--threshold", str(threshold), "--device", device, "--log-level", log_level,
     ]
 
@@ -92,7 +105,7 @@ def _read_report(report_dir, code: int) -> Report:
     if not path.exists():
         raise RuntimeError(f"the model check exited {code} without writing a report")
     report = Report.model_validate_json(path.read_text())
-    if report.error is not None and report.error not in EAGER | ONNX | ONNXSIM | TENSORRT | BENCHMARK:
+    if report.error is not None and report.error not in EAGER | TENSORRT_BRANCH:
         raise ValueError(f"report names unknown failure stage {report.error!r}")
     expected = 0 if report.error is None else 1
     if code != expected:
@@ -117,9 +130,22 @@ def run_model_check(state: State) -> State:
                 state["model_path"], state["npz_path"], report_dir, artifacts, config.precision,
                 config.threshold, DEVICE, state.get("log_level", "INFO"),
             )
-            report = _read_report(report_dir, code)
+            try:
+                report = _read_report(report_dir, code)
+            except Exception as exc:
+                if not (Path(report_dir) / PREREQUISITES_FILE).is_file():
+                    raise
+                # The prerequisites passed: the crash belongs to the ONNX/TensorRT branch, and kernelgen still runs.
+                detail = fail(logger, "model_check_crash", exc)["error_detail"]
+                return {
+                    "run_path": str(artifacts), "tensorrt_error": "model_check_crash",
+                    "tensorrt_error_detail": f"Exit code {code}. {detail}",
+                }
     except Exception as exc:
         return fail(logger, stage, exc)
+    if report.error in TENSORRT_BRANCH:
+        logger.info("the ONNX/TensorRT branch failed at stage %s; kernelgen still runs", report.error, extra={"stage": stage})
+        return {"run_path": str(artifacts), "tensorrt_error": report.error, "tensorrt_error_detail": report.error_detail}
     if report.error is not None:
         logger.info("the model check reported failure at stage %s", report.error, extra={"stage": stage})
         return {"run_path": str(artifacts), "error": report.error, "error_detail": report.error_detail}

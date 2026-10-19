@@ -31,6 +31,7 @@ PREFLIGHT = {
 
 MODEL_CHECK = {
     "model_check_run": "The model checks could not be run. Contact support.",
+    "model_check_crash": "The model checks stopped after the eager run passed, during the ONNX export, ONNX simplification, TensorRT engine build, or benchmark, without reporting a result. The process may have crashed; its exit code and the details are below.",
 }
 
 EAGER = {
@@ -84,7 +85,6 @@ EVALUATOR = {
 KERNELGEN = {
     "export_reference": "yasp-toolkit kernelgen export could not export model.py as the kernelgen reference. The exporter's output is below.",
     "kernelgen_reference": "The kernelgen reference (model.pt2) is missing from the artifact directory. Contact support.",
-    "kernelgen_engine": "The TensorRT engine (model.engine) kernelgen waits for is missing from the artifact directory. Contact support.",
     "kernelgen_toolkit": "The yasp-toolkit command is not available. Install yasp-agent as README.md describes.",
     "kernelgen_compile": "The kernelgen optimization did not produce a kernel. The toolkit's output is below; `yasp-toolkit kernelgen get <task id> --wait` shows the job's state.",
     "kernelgen_inspect": "The kernelgen kernel was written, but its report could not be shown with yasp-toolkit eval inspect. The toolkit's output is below.",

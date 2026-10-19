@@ -1,6 +1,8 @@
 """Kernelgen checks: export the reference, generate an optimized kernel with Gaia, then show the report it came with.
 
-Run after the model check: kernelgen is a hosted service reached through the
+Run after the model check once its prerequisites (loading the model,
+validating ``input.npz``, the eager forward) have passed, whether or not its
+ONNX/TensorRT branch did: kernelgen is a hosted service reached through the
 ``yasp-toolkit`` command of the yasp-agent package, installed on its own and
 run as a subprocess, never imported. It needs the user's Yasp API key
 (``YASP_API_KEY`` in the environment, or the OS keyring filled by
@@ -43,7 +45,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from kronos_edge.artifacts import ENGINE_FILE, KERNEL_FILE, PT2_FILE
+from kronos_edge.artifacts import KERNEL_FILE, PT2_FILE
 from kronos_edge.artifacts import KERNELGEN_REPORT_FILE as REPORT_FILE
 from kronos_edge.log import get_logger
 from kronos_edge.messages import KERNELGEN as CUSTOMER_MESSAGES
@@ -120,16 +122,12 @@ def export_reference(state: State) -> State:
 
 def kernelgen(state: State) -> State:
     stage = "kernelgen_reference"
+    produced: State = {}  # the kernel, once written: kept even if its inspection fails
     try:
         artifacts = Path(state["run_path"]).resolve()
         reference = artifacts / PT2_FILE
         if not reference.is_file():
             raise FileNotFoundError(f"{reference} was not written by the export")
-
-        stage = "kernelgen_engine"  # the TensorRT output this step waits for
-        engine = artifacts / ENGINE_FILE
-        if not engine.is_file():
-            raise FileNotFoundError(f"{engine} was not written by the model check")
 
         stage = "kernelgen_compile"
         config = state["config"]
@@ -148,9 +146,10 @@ def kernelgen(state: State) -> State:
             if not path.is_file():
                 raise ToolkitFailed(f"{TOOLKIT} exited 0 without writing {path.name}\n{output}")
         logger.info("wrote %s and %s", kernel, report, extra={"stage": stage})
+        produced = {"kernel_path": str(kernel)}
 
         stage = "kernelgen_inspect"
         _, rendered = run_logged(stage, ["eval", "inspect", "--file", str(report)])
     except Exception as exc:
-        return fail(logger, stage, exc)
-    return {"kernel_path": str(kernel), "kernelgen_report": rendered}
+        return {**produced, **fail(logger, stage, exc)}
+    return {**produced, "kernelgen_report": rendered}

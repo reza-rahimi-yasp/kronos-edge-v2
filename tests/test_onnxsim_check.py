@@ -45,10 +45,13 @@ def test_failure_stages(tmp_path, caplog, monkeypatch, env_files, simplify, stag
     state = run(env_files, write_model(tmp_path, CONV_RELU), write_npz(tmp_path, [X]))
 
     assert state["outcome"] == "failure"
-    assert state["error"] == stage
+    assert state["tensorrt_error"] == stage
     assert fragment in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == [stage]
-    assert sorted(f.name for f in run_directory(tmp_path / ".artifact").iterdir()) == ["model.onnx"]
+    # The ONNX/TensorRT branch stops at the simplification; the kernelgen branch still runs.
+    assert sorted(f.name for f in run_directory(tmp_path / ".artifact").iterdir()) == [
+        "kernel.py", "kernelgen_report.json", "model.onnx", "model.pt2",
+    ]
 
 
 def test_large_simplified_model_is_saved_with_external_data(monkeypatch, good_model, artifacts):

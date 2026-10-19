@@ -32,6 +32,9 @@ class State(TypedDict, total=False):
     log_level: str
     error: str | None
     error_detail: str
+    # The ONNX/TensorRT branch's failure: kept apart from `error` so the kernelgen branch still runs after it.
+    tensorrt_error: str
+    tensorrt_error_detail: str
     outcome: str
     customer_message: str
 
