@@ -122,6 +122,7 @@ def export_reference(state: State) -> State:
 
 def kernelgen(state: State) -> State:
     stage = "kernelgen_reference"
+    produced: State = {}  # the kernel, once written: kept even if its inspection fails
     try:
         artifacts = Path(state["run_path"]).resolve()
         reference = artifacts / PT2_FILE
@@ -145,9 +146,10 @@ def kernelgen(state: State) -> State:
             if not path.is_file():
                 raise ToolkitFailed(f"{TOOLKIT} exited 0 without writing {path.name}\n{output}")
         logger.info("wrote %s and %s", kernel, report, extra={"stage": stage})
+        produced = {"kernel_path": str(kernel)}
 
         stage = "kernelgen_inspect"
         _, rendered = run_logged(stage, ["eval", "inspect", "--file", str(report)])
     except Exception as exc:
-        return fail(logger, stage, exc)
-    return {"kernel_path": str(kernel), "kernelgen_report": rendered}
+        return {**produced, **fail(logger, stage, exc)}
+    return {**produced, "kernelgen_report": rendered}

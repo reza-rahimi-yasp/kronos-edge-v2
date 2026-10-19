@@ -53,6 +53,8 @@ def _kernelgen_lines(state: State) -> list[str]:
     """The kernelgen branch's result, once it produced a kernel."""
     if "kernel_path" not in state:
         return []
+    if "kernelgen_report" not in state:
+        return [f"The kernelgen kernel is {state['kernel_path']}."]
     return [
         f"The kernelgen optimization succeeded: the kernel is {state['kernel_path']}. "
         "Its report, as yasp-toolkit eval inspect shows it:",

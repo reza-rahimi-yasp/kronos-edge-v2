@@ -213,10 +213,14 @@ def test_an_inspection_failure_is_a_stage_and_keeps_the_kernel(tmp_path, caplog,
 
     assert state["outcome"] == "failure"
     assert state["error"] == "kernelgen_inspect"
+    assert stderr.strip() in state["error_detail"]
     assert stderr.strip() in state["customer_message"]
     assert [r.stage for r in error_records(caplog)] == ["kernelgen_inspect"]
     art = run_directory(tmp_path / ".artifact")
     assert (art / "kernel.py").is_file() and (art / "kernelgen_report.json").is_file()
+    assert state["kernel_path"] == str(art / "kernel.py")
+    assert str(art / "kernel.py") in state["customer_message"]
+    assert "kernelgen_report" not in state
 
 
 def test_real_run_toolkit_reports_a_missing_command_as_a_stage(tmp_path, monkeypatch, caplog, env_files):
