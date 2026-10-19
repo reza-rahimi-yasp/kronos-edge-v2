@@ -76,6 +76,14 @@ def failure(state: State) -> State:
     return {"outcome": "failure", "customer_message": "\n".join(lines)}
 
 
+def route_after_model_check(state: State) -> str:
+    """A prerequisite failure (or a model check that never showed them passed) stops the run; either ONNX/TensorRT
+    outcome continues to the kernelgen branch."""
+    if state.get("error"):
+        return "prerequisite_failure"
+    return "tensorrt_failure" if state.get("tensorrt_error") else "ok"
+
+
 def route_on_any_error(state: State) -> str:
     """After the kernelgen branch: a failure of either branch fails the run."""
     return "failure" if state.get("error") or state.get("tensorrt_error") else "ok"
@@ -96,7 +104,10 @@ def build_graph():
     graph.add_conditional_edges("load_config", route_on_error, {"ok": "match_environment", "failure": "failure"})
     graph.add_conditional_edges("match_environment", route_on_error, {"ok": "preflight", "failure": "failure"})
     graph.add_conditional_edges("preflight", route_on_error, {"ok": "run_model_check", "failure": "failure"})
-    graph.add_conditional_edges("run_model_check", route_on_error, {"ok": "export_reference", "failure": "failure"})
+    graph.add_conditional_edges(
+        "run_model_check", route_after_model_check,
+        {"ok": "export_reference", "tensorrt_failure": "export_reference", "prerequisite_failure": "failure"},
+    )
     graph.add_conditional_edges("export_reference", route_on_error, {"ok": "verify_evaluator", "failure": "failure"})
     graph.add_conditional_edges("verify_evaluator", route_on_error, {"ok": "kernelgen", "failure": "failure"})
     graph.add_conditional_edges("kernelgen", route_on_any_error, {"ok": "success", "failure": "failure"})

@@ -18,7 +18,7 @@ import pytest
 from conftest import CONFIG, FAKE_INSPECT, FAKE_REFERENCE, FAKE_TASK_LINE, fake_toolkit, run_directory, write_yaml
 from kronos_edge import artifacts, kernelgen_check, model_check, tensorrt_check
 from kronos_edge.config import Config
-from kronos_edge.workflow import main, run_check
+from kronos_edge.workflow import build_graph, main, route_after_model_check, run_check
 from test_eager_check import CONV_RELU, TYPO, X, error_records, run, write_model, write_npz
 
 # Captured at import, before the autouse fixture replaces it with the stub.
@@ -378,6 +378,33 @@ def test_kernelgen_runs_without_a_tensorrt_engine(tmp_path, monkeypatch):
 
 
 # ---------- Independent branches: after the prerequisites, ONNX/TensorRT and PT2/kernelgen each run whatever the other did.
+
+
+def test_the_graph_routes_explicitly_after_the_model_check():
+    """Both the ONNX/TensorRT outcomes lead to the kernelgen branch; only a prerequisite failure leads to failure."""
+    branches = build_graph().builder.branches["run_model_check"]
+
+    assert {name: branch.ends for name, branch in branches.items()} == {
+        "route_after_model_check": {
+            "ok": "export_reference",
+            "tensorrt_failure": "export_reference",
+            "prerequisite_failure": "failure",
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "update, route",
+    [
+        pytest.param({"benchmark": {}}, "ok", id="both_branches_continue"),
+        pytest.param({"tensorrt_error": "tensorrt_build"}, "tensorrt_failure", id="tensorrt_failed"),
+        pytest.param({"tensorrt_error": "model_check_crash"}, "tensorrt_failure", id="crashed_after_prerequisites"),
+        pytest.param({"error": "forward"}, "prerequisite_failure", id="prerequisite_failed"),
+        pytest.param({"error": "model_check_run"}, "prerequisite_failure", id="prerequisites_unknown"),
+    ],
+)
+def test_route_after_model_check(update, route):
+    assert route_after_model_check(update) == route
 
 
 def tensorrt_fails(monkeypatch):

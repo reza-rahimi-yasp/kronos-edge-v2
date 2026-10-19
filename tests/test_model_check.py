@@ -6,6 +6,7 @@ node around it, the report protocol, the command, and the real subprocess agains
 
 import json
 import os
+import signal
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -51,10 +52,13 @@ def run(env_files, good_model):
     return run_check(config, *good_model, environments_path=environments)
 
 
-def fake_process(monkeypatch, report=None, code=0):
-    """Replace the subprocess with something that writes `report` (if given) and exits with `code`."""
+def fake_process(monkeypatch, report=None, code=0, prerequisites=False):
+    """Replace the subprocess with something that marks the prerequisites passed (if asked), writes `report` (if given),
+    and exits with `code`."""
 
     def fake(model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level):
+        if prerequisites:
+            (Path(report_dir) / model_check.PREREQUISITES_FILE).touch()
         if report is not None:
             (Path(report_dir) / model_check.REPORT_FILE).write_text(report)
         return code
@@ -69,7 +73,8 @@ def test_build_command_runs_the_eager_check_in_this_interpreter(tmp_path):
 
     assert cmd == [
         sys.executable, "-m", "kronos_edge.eager_check", str(model.resolve()), str(npz.resolve()),
-        "--report", str(out.resolve() / "report.json"), "--artifacts", str(art.resolve()),
+        "--report", str(out.resolve() / "report.json"), "--prerequisites", str(out.resolve() / "prerequisites_passed"),
+        "--artifacts", str(art.resolve()),
         "--precision", "fp16", "--threshold", "0.99", "--device", "cuda", "--log-level", "DEBUG",
     ]
     assert "docker" not in cmd and "--gpus" not in cmd
@@ -189,7 +194,7 @@ def test_missing_package_reaches_the_report(tmp_path, good_model, artifacts, blo
     code = (
         f"import sys; sys.modules[{blocked!r}] = None\n"
         "from kronos_edge.eager_check import main\n"
-        f"sys.exit(main([{str(model)!r}, {str(npz)!r}, '--report', {str(report_path)!r}, "
+        f"sys.exit(main([{str(model)!r}, {str(npz)!r}, '--report', {str(report_path)!r}, '--prerequisites', {str(tmp_path / 'prerequisites_passed')!r}, "
         f"'--artifacts', {str(artifacts)!r}, '--precision', 'fp32', '--threshold', '0.99', '--device', 'cpu']))\n"
     )
     env = {**os.environ, "PYTHONPATH": str(SRC)}
@@ -288,6 +293,69 @@ def test_an_inner_tensorrt_branch_failure_is_kept_apart_and_kernelgen_runs(monke
     assert error_records(caplog) == []
 
 
+@pytest.mark.parametrize(
+    "report, code",
+    [
+        pytest.param(None, -11, id="segfault_without_report"),
+        pytest.param(None, 0, id="no_report_file"),
+        pytest.param('{"error": nu', -11, id="truncated_report"),
+        pytest.param(json.dumps({"error": None, "benchmark": BENCHMARK}), 139, id="success_report_but_crashed_on_exit"),
+    ],
+)
+def test_a_crash_after_the_prerequisites_is_a_tensorrt_branch_failure_and_kernelgen_runs(
+    monkeypatch, caplog, env_files, good_model, report, code,
+):
+    """The child marked the prerequisites passed before the ONNX/TensorRT work, then left no usable report:
+    the crash belongs to the ONNX/TensorRT branch, so kernelgen still runs in the same run directory."""
+    fake_process(monkeypatch, report, code, prerequisites=True)
+
+    state = run(env_files, good_model)
+
+    assert state["outcome"] == "failure"
+    assert state["tensorrt_error"] == "model_check_crash"
+    assert str(code) in state["tensorrt_error_detail"]
+    assert state.get("error") is None
+    assert "benchmark" not in state
+    art = run_directory(Path(".artifact"))
+    assert state["run_path"] == str(art)
+    assert state["kernel_path"] == str((art / "kernel.py").resolve())
+    message = state["customer_message"]
+    assert message.index("stopped after the eager run passed") < message.index("the kernel is")
+    assert [r.stage for r in error_records(caplog)] == ["model_check_crash"]
+
+
+def test_without_the_prerequisites_marker_a_crash_stops_the_run(monkeypatch, caplog, env_files, good_model):
+    fake_process(monkeypatch, None, -11)
+
+    state = run(env_files, good_model)
+
+    assert state["error"] == "model_check_run"
+    assert "tensorrt_error" not in state and "kernel_path" not in state
+    assert [r.stage for r in error_records(caplog)] == ["model_check_run"]
+
+
+def test_the_prerequisites_are_marked_after_the_eager_forward_and_before_the_onnx_export(good_model, artifacts):
+    seen = []
+
+    state = eager_check.run(*good_model, artifacts, on_prerequisites=lambda: seen.append(sorted(f.name for f in artifacts.iterdir())))
+
+    assert state.get("error") is None
+    assert seen == [[]]  # called once, before the ONNX export wrote anything
+    assert "model.onnx" in {f.name for f in artifacts.iterdir()}
+
+
+def test_a_failed_prerequisite_is_never_marked(tmp_path, good_model, artifacts):
+    _, npz = good_model
+    model = tmp_path / "model.py"
+    model.write_text(TYPO_MODEL)
+    seen = []
+
+    state = eager_check.run(model, npz, artifacts, on_prerequisites=lambda: seen.append(True))
+
+    assert state["error"] == "forward"
+    assert seen == []
+
+
 def test_inner_failure_passes_through_without_a_host_error(monkeypatch, caplog, env_files, good_model):
     fake_process(monkeypatch, json.dumps({"error": "forward", "error_detail": "AttributeError: inner"}), 1)
 
@@ -328,12 +396,13 @@ def test_eager_main_writes_json_report(tmp_path, good_model, artifacts, source, 
     _, npz = good_model
     model = tmp_path / "model.py"
     model.write_text(source)
-    report_path = tmp_path / "report.json"
+    report_path, marker = tmp_path / "report.json", tmp_path / "prerequisites_passed"
 
-    exit_code = eager_check.main([str(model), str(npz), "--report", str(report_path), "--artifacts", str(artifacts), "--precision", "fp32", "--threshold", "0.99", "--device", "cpu"])
+    exit_code = eager_check.main([str(model), str(npz), "--report", str(report_path), "--prerequisites", str(marker), "--artifacts", str(artifacts), "--precision", "fp32", "--threshold", "0.99", "--device", "cpu"])
 
     report = json.loads(report_path.read_text())
     assert exit_code == code
+    assert marker.is_file() == (error is None)
     assert report["error"] == error
     assert ("convv" in report["error_detail"]) == (error is not None)
 
@@ -355,7 +424,7 @@ def test_user_prints_do_not_corrupt_the_report(tmp_path, good_model, artifacts):
         "from conftest import FakeEngineRunner\n"
         "benchmark_check.load_engine = FakeEngineRunner\n"
         "from kronos_edge.eager_check import main\n"
-        f"sys.exit(main([{str(model)!r}, {str(npz)!r}, '--report', {str(report_path)!r}, "
+        f"sys.exit(main([{str(model)!r}, {str(npz)!r}, '--report', {str(report_path)!r}, '--prerequisites', {str(tmp_path / 'prerequisites_passed')!r}, "
         f"'--artifacts', {str(artifacts)!r}, '--precision', 'fp32', '--threshold', '0.99', '--device', 'cpu']))\n"
     )
     tests_dir = str(Path(__file__).resolve().parent)
@@ -388,6 +457,7 @@ def test_the_real_subprocess_runs_the_eager_check_and_writes_the_report(tmp_path
     assert (report.error is None) == (report.benchmark is not None)
     assert report.error in (None, "tensorrt_import", "benchmark_runtime")  # this environment may lack TensorRT
     assert "model.onnx" in {f.name for f in artifacts.iterdir()}  # the child ran this package's nodes
+    assert (tmp_path / model_check.PREREQUISITES_FILE).is_file()
     assert capsys.readouterr().out == ""  # nothing of the child's stdout is routed through the workflow
 
 
@@ -413,6 +483,33 @@ def test_the_real_subprocess_hands_the_model_no_yasp_credentials(tmp_path, good_
     assert code == (0 if report.error is None else 1)
     assert "fake-secret-sentinel" not in report.error_detail
     assert capsys.readouterr().out == ""
+
+
+# Segfaults on the second forward: the eager run passes, the ONNX export's trace kills the process.
+CRASHING_MODEL = GOOD_MODEL.replace(
+    "import torch\n", "import os\nimport signal\nimport torch\n\nCALLS = []\n", 1,
+).replace(
+    "        return self.conv(x)",
+    "        CALLS.append(1)\n        if len(CALLS) > 1:\n            os.kill(os.getpid(), signal.SIGSEGV)\n        return self.conv(x)",
+)
+
+
+def test_a_real_segfault_after_the_eager_run_still_runs_kernelgen(tmp_path, monkeypatch, caplog, env_files, good_model):
+    """The real subprocess dies by a signal during the ONNX/TensorRT work and leaves no report.json."""
+    _, npz = good_model
+    model = tmp_path / "model.py"
+    model.write_text(CRASHING_MODEL)
+    monkeypatch.setattr(model_check, "run_process", REAL_RUN_PROCESS)
+    monkeypatch.setattr(model_check, "DEVICE", "cpu")
+    config, environments = env_files
+
+    state = run_check(config, model, npz, environments_path=environments, log_level="ERROR")
+
+    assert state["tensorrt_error"] == "model_check_crash"
+    assert str(-signal.SIGSEGV) in state["tensorrt_error_detail"]
+    assert state.get("error") is None
+    assert state["kernel_path"] == str((run_directory(Path(".artifact")) / "kernel.py").resolve())
+    assert [r.stage for r in error_records(caplog)] == ["model_check_crash"]
 
 
 def test_the_subprocess_environment_drops_only_the_yasp_credentials(monkeypatch):

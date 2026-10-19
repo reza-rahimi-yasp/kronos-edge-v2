@@ -31,6 +31,7 @@ PREFLIGHT = {
 
 MODEL_CHECK = {
     "model_check_run": "The model checks could not be run. Contact support.",
+    "model_check_crash": "The model checks stopped after the eager run passed, during the ONNX export, ONNX simplification, TensorRT engine build, or benchmark, without reporting a result. The process may have crashed; its exit code and the details are below.",
 }
 
 EAGER = {

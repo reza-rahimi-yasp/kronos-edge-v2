@@ -90,10 +90,14 @@ def environment_matches_registry(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def eager_check_runs_in_process(monkeypatch):
-    """Stand in for the model-check subprocess: run the eager sub-graph here, on CPU, write its report, return its exit code."""
+    """Stand in for the model-check subprocess: run the eager sub-graph here, on CPU, mark its prerequisites and write
+    its report as eager_check.main does, return its exit code."""
 
     def fake_run_process(model_path, npz_path, report_dir, artifacts_dir, precision, threshold, device, log_level):
-        state = eager_check.run(model_path, npz_path, artifacts_dir, precision=precision, threshold=threshold, device="cpu")
+        state = eager_check.run(
+            model_path, npz_path, artifacts_dir, precision=precision, threshold=threshold, device="cpu",
+            on_prerequisites=(Path(report_dir) / model_check.PREREQUISITES_FILE).touch,
+        )
         (Path(report_dir) / model_check.REPORT_FILE).write_text(eager_check.report(state))
         return 0 if state.get("error") is None else 1
 

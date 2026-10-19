@@ -122,8 +122,8 @@ def test_export_is_written_to_the_artifact_directory(tmp_path, monkeypatch, env_
     onnx.checker.check_model(onnx.load(run_directory(tmp_path / ".artifact") / "model.onnx"))
 
 
-def test_report_directory_holds_only_the_report(tmp_path, monkeypatch, env_files):
-    """The export must not leave an .onnx file next to report.json for the host to clean up."""
+def test_report_directory_holds_only_the_protocol_files(tmp_path, monkeypatch, env_files):
+    """The export must not leave an .onnx file next to report.json and the prerequisites marker for the host to clean up."""
     seen = {}
     real_run_process = model_check.run_process
 
@@ -137,7 +137,7 @@ def test_report_directory_holds_only_the_report(tmp_path, monkeypatch, env_files
     state = run(env_files, write_model(tmp_path, CONV_RELU), write_npz(tmp_path, [X]))
 
     assert state["outcome"] == "success"
-    assert seen["files"] == [model_check.REPORT_FILE]
+    assert seen["files"] == sorted([model_check.PREREQUISITES_FILE, model_check.REPORT_FILE])
 
 
 def test_failed_export_writes_no_onnx_file(tmp_path, env_files):

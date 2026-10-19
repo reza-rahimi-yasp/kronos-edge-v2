@@ -2,7 +2,10 @@
 
 Runs as a subprocess of the workflow's interpreter (``python -m
 kronos_edge.eager_check``) and reports through a JSON file, so the user's
-model owns stdout. model.py must define ``Model`` (a torch.nn.Module
+model owns stdout. Once the eager forward has passed, before any ONNX/TensorRT
+work, it creates the ``--prerequisites`` file, so the host knows the
+prerequisites passed even if a later step kills the process before the
+report is written. model.py must define ``Model`` (a torch.nn.Module
 subclass) and ``get_inputs()`` or ``get_fwd_args()`` returning the reference
 inputs. ``get_init_inputs()`` is optional and supplies constructor arguments.
 input.npz holds one array per reference input under ``arr_0 .. arr_n-1``,
@@ -164,13 +167,19 @@ def build_graph():
 
 def run(
     model_path, npz_path, artifacts_dir, precision: str = "fp32", threshold: float = 0.99, device: str = "cpu",
+    on_prerequisites=lambda: None,
 ) -> State:
-    return build_graph().invoke(
-        {
-            "model_path": str(model_path), "npz_path": str(npz_path), "artifacts_dir": str(artifacts_dir),
-            "precision": precision, "threshold": threshold, "device": device,
-        }
-    )
+    """Run the graph; call ``on_prerequisites`` once the eager forward passed, before the ONNX/TensorRT work starts."""
+    state: State = {
+        "model_path": str(model_path), "npz_path": str(npz_path), "artifacts_dir": str(artifacts_dir),
+        "precision": precision, "threshold": threshold, "device": device,
+    }
+    for mode, chunk in build_graph().stream(state, stream_mode=["updates", "values"]):
+        if mode == "values":
+            state = chunk
+        elif "run_eager" in chunk and not (chunk["run_eager"] or {}).get("error"):
+            on_prerequisites()
+    return state
 
 
 def report(state: State) -> str:
@@ -185,6 +194,7 @@ def main(argv=None) -> int:
     parser.add_argument("model_path")
     parser.add_argument("npz_path")
     parser.add_argument("--report", required=True, help="where to write the JSON report")
+    parser.add_argument("--prerequisites", required=True, help="file created once the eager forward passed")
     parser.add_argument("--artifacts", required=True, help="existing directory for the files the checks produce")
     parser.add_argument("--precision", required=True, choices=PRECISIONS, help="TensorRT engine precision")
     parser.add_argument("--threshold", required=True, type=float, help="minimum metric value for every output")
@@ -195,6 +205,7 @@ def main(argv=None) -> int:
     state = run(
         args.model_path, args.npz_path, args.artifacts,
         precision=args.precision, threshold=args.threshold, device=args.device,
+        on_prerequisites=lambda: open(args.prerequisites, "x").close(),
     )
     with open(args.report, "w") as f:
         f.write(report(state))
