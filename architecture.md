@@ -41,8 +41,9 @@ stateDiagram-v2
     match_environment --> failure : error
     preflight --> run_model_check : ok (this environment is the entry)
     preflight --> failure : error
-    run_model_check --> export_reference : ok, or the ONNX/TensorRT branch failed (tensorrt_error)
-    run_model_check --> failure : error (a prerequisite failed, or no usable report)
+    run_model_check --> export_reference : ok
+    run_model_check --> export_reference : tensorrt_failure (tensorrt_error, or a crash after the prerequisites)
+    run_model_check --> failure : prerequisite_failure (a prerequisite failed, or no usable report and no marker)
     export_reference --> verify_evaluator : ok (model.pt2)
     export_reference --> failure : error
     verify_evaluator --> kernelgen : ok (worker registered)
@@ -58,7 +59,7 @@ stateDiagram-v2
         load_model --> report : error
         validate_inputs --> run_eager : ok
         validate_inputs --> report : error
-        run_eager --> export_onnx : ok
+        run_eager --> export_onnx : ok (creates the prerequisites marker first)
         run_eager --> report : error
         export_onnx --> simplify_onnx : ok
         export_onnx --> report : error
@@ -74,9 +75,10 @@ stateDiagram-v2
 Every node either advances the state or records a failure stage in
 `error` and `error_detail`; `route_on_error` sends any failure to `failure`.
 The one exception is a failure of the ONNX/TensorRT branch, which
-`run_model_check` records in `tensorrt_error` and `tensorrt_error_detail` so
-the kernelgen branch still runs; after `kernelgen`, either kind of failure
-routes to `failure`.
+`run_model_check` records in `tensorrt_error` and `tensorrt_error_detail`;
+`route_after_model_check` sends it to the kernelgen branch as
+`tensorrt_failure`, and only a `prerequisite_failure` to `failure`. After
+`kernelgen`, either kind of failure routes to `failure`.
 
 ## Workflow graph
 
@@ -111,8 +113,13 @@ routes to `failure`.
   validating the inputs, the eager forward), which stops the run, and in
   `tensorrt_error` for a stage of the ONNX/TensorRT branch (ONNX export,
   onnxsim, engine build, benchmark), after which the kernelgen branch still
-  runs. A `model_check_run` failure does not show that the prerequisites
-  passed, so it stops the run too.
+  runs. Before the ONNX/TensorRT branch starts, the subprocess creates the
+  prerequisites marker (`--prerequisites`, next to `report.json`). If it then
+  leaves no usable report (it crashed, was killed, or its exit code disagrees
+  with the report), the marker shows the prerequisites passed, so the failure
+  is `model_check_crash` in `tensorrt_error`, with the exit code, and the
+  kernelgen branch still runs. Without the marker it is `model_check_run`: the
+  prerequisites are not known to have passed, so it stops the run.
 - `export_reference` (`kernelgen_check.py`): runs `yasp-toolkit kernelgen
   export --input model.py --output <run_path>/model.pt2`
   (https://compile.yasp.ai/help/reference/kernelgen/#export) as a subprocess

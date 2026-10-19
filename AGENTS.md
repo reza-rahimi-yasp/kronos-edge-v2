@@ -129,8 +129,12 @@ decisions: do not add file listings, commands, or summaries here.
 - The model check's success report must carry the benchmark; the workflow
   refuses a success without one.
 - Loading the model, validating `input.npz`, and the eager forward are
-  prerequisites: if one fails, or the model check leaves no usable report,
-  neither the PT2 export nor any later step runs. Past them, the ONNX/TensorRT
+  prerequisites: if one fails, or the model check leaves no usable report
+  before showing they passed, neither the PT2 export nor any later step runs.
+  The subprocess creates a prerequisites marker before the ONNX/TensorRT
+  work, so a crash after it (no usable report) is an ONNX/TensorRT failure,
+  `model_check_crash`. The workflow graph routes on this explicitly after
+  `run_model_check`. Past them, the ONNX/TensorRT
   branch and the PT2/kernelgen branch are independent and run in that order:
   an ONNX/TensorRT failure is kept in `tensorrt_error` and kernelgen still
   runs; a kernelgen failure keeps the ONNX/TensorRT files and benchmark. Either
@@ -143,7 +147,7 @@ decisions: do not add file listings, commands, or summaries here.
   and the Dockerfile's labels state the same versions. Change all three
   together; a test compares the entry with the labels.
 - The model-check subprocess talks to the workflow only through `report.json`
-  in a temporary directory. Never through stdout: the user's model owns
+  and the prerequisites marker in a temporary directory. Never through stdout: the user's model owns
   stdout. Logs go to stderr, which the workflow inherits.
 - Files produced for the user (`.onnx`, `.engine`, the kernelgen files) go
   only to the run directory: a new directory under the artifact root
