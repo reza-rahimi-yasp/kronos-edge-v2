@@ -57,8 +57,10 @@ python -m venv .venv
 .venv/bin/pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
 ```
 
-`yasp-toolkit` comes from `yasp-agent`, which is published on the yasp package
-index, not on PyPI. The check runs it as a command and never imports it, so it
+`yasp-toolkit` comes from the latest release of `yasp-agent`, which is published
+on the yasp package index, not on PyPI. Always install the latest release,
+without a version pin; rerun the command below to upgrade an existing install.
+The check runs it as a command and never imports it, so it
 is installed on its own, the way the
 [pipx guide](https://compile.yasp.ai/help/advanced/pipx/) of the yasp docs
 shows. That index is read with a registry key: a scoped, long-lived key
@@ -75,9 +77,9 @@ path and is removed when the subshell ends, success or failure:
   set -e; umask 077
   NETRC_FILE=$(mktemp); trap 'rm -f "$NETRC_FILE"' EXIT
   printf 'machine nexus.yasp.ai\nlogin token\npassword %s\n' "$REGISTRY_KEY" > "$NETRC_FILE"
-  NETRC="$NETRC_FILE" pipx install \
-      --pip-args="--extra-index-url https://nexus.yasp.ai/repository/pypi-hosted/simple/" \
-      'yasp-agent[gaia,kronos]==0.5.2'
+  NETRC="$NETRC_FILE" pipx install --force \
+      --pip-args="--upgrade --extra-index-url https://nexus.yasp.ai/repository/pypi-hosted/simple/" \
+      'yasp-agent[gaia,kronos]'
 )
 ```
 
@@ -123,18 +125,22 @@ Deploy it on this machine by following the
 written, with one addition: register it in your own routing pool by adding
 `--tag routing=<eval_routing>` to its `yasp-eval register` line, as
 [Tags & routing](https://compile.yasp.ai/help/gaia/workers/#tags-routing)
-describes. For example, with `eval_routing: reza-fractal`:
+describes. Read the routing key from the `config.yaml` you will pass to the
+check (see "Prepare your config file"):
 
 ```bash
+EVAL_ROUTING=$(.venv/bin/python -c \
+    'import yaml; print(yaml.safe_load(open("config.yaml"))["eval_routing"])')
+
 ... $GAIA_IMAGE yasp-eval register \
-    --tag routing=reza-fractal \
+    --tag "routing=$EVAL_ROUTING" \
     --tag host=$(hostname -s) --tag version=$GAIA_TAG --tag last_update=$(date +%F)
 ```
 
 Then confirm it is listed with your GPU and routing key:
 
 ```bash
-yasp-toolkit eval workers --tag routing=reza-fractal
+yasp-toolkit eval workers --tag "routing=$EVAL_ROUTING"
 ```
 
 The check runs that same listing before any kernelgen job and stops if no
