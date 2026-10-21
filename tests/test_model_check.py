@@ -92,7 +92,7 @@ def test_the_subprocess_imports_this_package(monkeypatch):
 
 
 ALL_FILES = [
-    "benchmark.json", "kernel.py", "kernelgen_report.json",
+    "benchmark.json", "kernel.py", "kernelgen_guidance.txt", "kernelgen_report.json",
     "model.engine", "model.onnx", "model.pt2", "model_simplified.onnx",
 ]
 
@@ -128,7 +128,7 @@ def test_successive_runs_keep_the_earlier_run_directories(monkeypatch, tmp_path,
     assert {f.name: f.read_bytes() for f in first_run.iterdir()} == before
     # The failed run keeps what it produced before the failure and the kernelgen branch's files, and nothing of the first run.
     assert sorted(f.name for f in (art / "20261017T143100Z").iterdir()) == [
-        "kernel.py", "kernelgen_report.json", "model.onnx", "model.pt2",
+        "kernel.py", "kernelgen_guidance.txt", "kernelgen_report.json", "model.onnx", "model.pt2",
     ]
 
 

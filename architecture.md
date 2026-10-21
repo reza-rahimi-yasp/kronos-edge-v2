@@ -200,8 +200,12 @@ by path; the onnxsim step is unverified above that size.
   started, stopped, or minted. Stages:
   `evaluator_inventory`, `evaluator_missing` (plus `kernelgen_toolkit`).
 - `kernelgen` (`kernelgen_check.py`): requires `model.pt2` in the run
-  directory, then runs `yasp-toolkit kernelgen compile` with the
-  reference alone (no `--source`), the config's `gpu` as target, and the
+  directory, then writes `kernelgen_guidance.txt` there before compile and
+  passes its path as `--config guidance=@<run_path>/kernelgen_guidance.txt`.
+  The guidance requests a `describe_ops()` manifest in the generated kernel;
+  the check neither consumes nor validates it. It then runs
+  `yasp-toolkit kernelgen compile` with the reference alone (no `--source`),
+  the config's `gpu` as target, and the
   config's `eval_routing` for the in-compile evaluations; the command polls the
   job until it is terminal. Requires `kernel.py` and `kernelgen_report.json`
   afterwards (the toolkit can exit 0 after an early error), then runs

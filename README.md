@@ -57,8 +57,10 @@ python -m venv .venv
 .venv/bin/pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
 ```
 
-`yasp-toolkit` comes from `yasp-agent`, which is published on the yasp package
-index, not on PyPI. The check runs it as a command and never imports it, so it
+`yasp-toolkit` comes from the latest release of `yasp-agent`, which is published
+on the yasp package index, not on PyPI. Always install the latest release,
+without a version pin; rerun the command below to upgrade an existing install.
+The check runs it as a command and never imports it, so it
 is installed on its own, the way the
 [pipx guide](https://compile.yasp.ai/help/advanced/pipx/) of the yasp docs
 shows. That index is read with a registry key: a scoped, long-lived key
@@ -75,9 +77,9 @@ path and is removed when the subshell ends, success or failure:
   set -e; umask 077
   NETRC_FILE=$(mktemp); trap 'rm -f "$NETRC_FILE"' EXIT
   printf 'machine nexus.yasp.ai\nlogin token\npassword %s\n' "$REGISTRY_KEY" > "$NETRC_FILE"
-  NETRC="$NETRC_FILE" pipx install \
-      --pip-args="--extra-index-url https://nexus.yasp.ai/repository/pypi-hosted/simple/" \
-      'yasp-agent[gaia,kronos]==0.5.2'
+  NETRC="$NETRC_FILE" pipx install --force \
+      --pip-args="--upgrade --extra-index-url https://nexus.yasp.ai/repository/pypi-hosted/simple/" \
+      'yasp-agent[gaia,kronos]'
 )
 ```
 
@@ -123,18 +125,22 @@ Deploy it on this machine by following the
 written, with one addition: register it in your own routing pool by adding
 `--tag routing=<eval_routing>` to its `yasp-eval register` line, as
 [Tags & routing](https://compile.yasp.ai/help/gaia/workers/#tags-routing)
-describes. For example, with `eval_routing: reza-fractal`:
+describes. Read the routing key from the `config.yaml` you will pass to the
+check (see "Prepare your config file"):
 
 ```bash
+EVAL_ROUTING=$(.venv/bin/python -c \
+    'import yaml; print(yaml.safe_load(open("config.yaml"))["eval_routing"])')
+
 ... $GAIA_IMAGE yasp-eval register \
-    --tag routing=reza-fractal \
+    --tag "routing=$EVAL_ROUTING" \
     --tag host=$(hostname -s) --tag version=$GAIA_TAG --tag last_update=$(date +%F)
 ```
 
 Then confirm it is listed with your GPU and routing key:
 
 ```bash
-yasp-toolkit eval workers --tag routing=reza-fractal
+yasp-toolkit eval workers --tag "routing=$EVAL_ROUTING"
 ```
 
 The check runs that same listing before any kernelgen job and stops if no
@@ -376,12 +382,19 @@ Then the check confirms your Gaia worker is registered (see "Deploy the Gaia
 worker") and runs the documented generation, the
 [reference alone](https://compile.yasp.ai/help/gaia/generate-your-first-kernel/#step-3-generate)
 with your config's `gpu` as the target and its in-compile evaluations routed to
-your worker:
+your worker. Before compiling, it writes `kernelgen_guidance.txt` in the run
+directory and passes it through the documented
+[`--config guidance=@PATH`](https://compile.yasp.ai/help/reference/kernelgen/#compile)
+setting. The guidance requests a `describe_ops()` manifest in `kernel.py` for
+each fused op, including its export contract, build requirements, and declared
+constraints, with tuning moved out of `forward`. The check does not consume or
+validate that manifest.
 
 ```bash
 yasp-toolkit kernelgen compile --reference .artifact/<run>/model.pt2 --gpu-name "<gpu>" \
     --output .artifact/<run>/kernel.py --report .artifact/<run>/kernelgen_report.json \
-    --no-progress --eval-routing <eval_routing>
+    --no-progress --eval-routing <eval_routing> \
+    --config guidance=@.artifact/<run>/kernelgen_guidance.txt
 ```
 
 No `--source` is passed, so no Python of yours runs on the service's side.
@@ -416,6 +429,7 @@ failure, the files produced before it are kept in that run's directory.
 | `model.engine` | The serialized TensorRT engine, at the configured precision. Specific to this GPU and TensorRT version. |
 | `benchmark.json` | The latency statistics of both sides, the speedup, and the metric values, as printed. |
 | `model.pt2` | The kernelgen reference `yasp-toolkit kernelgen export` wrote from `model.py`. |
+| `kernelgen_guidance.txt` | The guidance the check sends to kernelgen compile. |
 | `kernel.py` | The optimized kernel kernelgen returned (its `module_source.py`). |
 | `kernelgen_report.json` | The kernelgen job's report, as printed by `yasp-toolkit eval inspect`. |
 

@@ -60,13 +60,19 @@ def test_kernelgen_runs_after_the_export_and_its_report_is_inspected(tmp_path, m
     compile_args, seen_before_compile = calls[2]
     inspect_args, seen_before_inspect = calls[3]
     # kernelgen starts once the export has written the reference; the ONNX/TensorRT branch ran before it.
-    assert {"model.pt2", "model.engine", "model.onnx", "model_simplified.onnx"} <= set(seen_before_compile)
+    assert {"model.pt2", "model.engine", "model.onnx", "model_simplified.onnx", "kernelgen_guidance.txt"} <= set(seen_before_compile)
     assert "kernel.py" not in seen_before_compile
     art = run_directory(tmp_path / ".artifact")
     assert option(compile_args, "--reference") == str(art / "model.pt2")
     assert option(compile_args, "--gpu-name") == CONFIG["gpu"]
     assert option(compile_args, "--output") == str(art / "kernel.py")
     assert option(compile_args, "--report") == str(art / "kernelgen_report.json")
+    config_index = compile_args.index("--config")
+    assert compile_args[config_index:config_index + 2] == ["--config", f"guidance=@{art}/kernelgen_guidance.txt"]
+    guidance = (art / "kernelgen_guidance.txt").read_text()
+    assert guidance == kernelgen_check.KERNELGEN_GUIDANCE
+    assert "describe_ops()" in guidance
+    assert guidance not in compile_args
     assert "--no-progress" in compile_args
     # The documented starting workflow: the reference alone, no model source uploaded to the service.
     assert "--source" not in compile_args
@@ -85,7 +91,7 @@ def test_success_shows_the_inspected_report(tmp_path, caplog, env_files, good_mo
     assert "kernel.py" in state["customer_message"]
     assert FAKE_INSPECT.strip() in state["customer_message"]
     assert sorted(f.name for f in run_directory(tmp_path / ".artifact").iterdir()) == [
-        "benchmark.json", "kernel.py", "kernelgen_report.json",
+        "benchmark.json", "kernel.py", "kernelgen_guidance.txt", "kernelgen_report.json",
         "model.engine", "model.onnx", "model.pt2", "model_simplified.onnx",
     ]
     assert error_records(caplog) == []
@@ -442,7 +448,7 @@ def test_a_tensorrt_failure_still_runs_the_export_and_kernelgen(tmp_path, caplog
     assert f"the kernel is {art / 'kernel.py'}." in message and FAKE_INSPECT.strip() in message
     assert message.index("TensorRT could not build") < message.index("the kernel is")
     assert sorted(f.name for f in art.iterdir()) == [
-        "kernel.py", "kernelgen_report.json", "model.onnx", "model.pt2", "model_simplified.onnx",
+        "kernel.py", "kernelgen_guidance.txt", "kernelgen_report.json", "model.onnx", "model.pt2", "model_simplified.onnx",
     ]
     assert [r.stage for r in error_records(caplog)] == ["tensorrt_build"]
 
@@ -572,7 +578,7 @@ def test_export_failures_are_stages_and_stop_before_any_other_toolkit_call(tmp_p
 
 
 def test_kernelgen_files_are_managed_artifacts():
-    assert {artifacts.PT2_FILE, artifacts.KERNEL_FILE, artifacts.KERNELGEN_REPORT_FILE} <= set(artifacts.MANAGED_FILES)
+    assert {artifacts.PT2_FILE, artifacts.KERNEL_FILE, artifacts.KERNELGEN_GUIDANCE_FILE, artifacts.KERNELGEN_REPORT_FILE} <= set(artifacts.MANAGED_FILES)
     assert not hasattr(artifacts, "KERNELGEN_EVAL_FILE")
     assert kernelgen_check.KERNEL_FILE == artifacts.KERNEL_FILE
 

@@ -17,11 +17,12 @@ SIMPLIFIED_FILE = "model_simplified.onnx"
 ENGINE_FILE = "model.engine"
 BENCHMARK_FILE = "benchmark.json"
 PT2_FILE = "model.pt2"  # the reference `yasp-toolkit kernelgen export` writes from model.py
+KERNELGEN_GUIDANCE_FILE = "kernelgen_guidance.txt"  # the guidance we send with kernelgen compile
 KERNEL_FILE = "kernel.py"  # the optimized kernel kernelgen returns
 KERNELGEN_REPORT_FILE = "kernelgen_report.json"  # the kernelgen job's report
 MANAGED_FILES = (
     EXPORTED_FILE, SIMPLIFIED_FILE, ENGINE_FILE, BENCHMARK_FILE,
-    PT2_FILE, KERNEL_FILE, KERNELGEN_REPORT_FILE,
+    PT2_FILE, KERNELGEN_GUIDANCE_FILE, KERNEL_FILE, KERNELGEN_REPORT_FILE,
 )
 
 # Weights above the protobuf limit go to a companion file with this suffix.
