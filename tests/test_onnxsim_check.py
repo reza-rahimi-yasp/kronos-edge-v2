@@ -50,7 +50,7 @@ def test_failure_stages(tmp_path, caplog, monkeypatch, env_files, simplify, stag
     assert [r.stage for r in error_records(caplog)] == [stage]
     # The ONNX/TensorRT branch stops at the simplification; the kernelgen branch still runs.
     assert sorted(f.name for f in run_directory(tmp_path / ".artifact").iterdir()) == [
-        "kernel.py", "kernelgen_report.json", "model.onnx", "model.pt2",
+        "kernel.py", "kernelgen_guidance.txt", "kernelgen_report.json", "model.onnx", "model.pt2",
     ]
 
 

@@ -45,7 +45,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from kronos_edge.artifacts import KERNEL_FILE, PT2_FILE
+from kronos_edge.artifacts import KERNEL_FILE, KERNELGEN_GUIDANCE_FILE, PT2_FILE
 from kronos_edge.artifacts import KERNELGEN_REPORT_FILE as REPORT_FILE
 from kronos_edge.log import get_logger
 from kronos_edge.messages import KERNELGEN as CUSTOMER_MESSAGES
@@ -54,6 +54,33 @@ from kronos_edge.state import State, fail
 logger = get_logger(__name__)
 
 TOOLKIT = "yasp-toolkit"
+
+KERNELGEN_GUIDANCE = """Include describe_ops() in the generated kernel.py. Return a JSON-serializable
+dict with a manifest schema version and one entry for every fused kernel op,
+sufficient to register it as a custom op, export it through torch.export to an
+ONNX custom-domain node, and lower it to a TensorRT plugin. Describe each op:
+- A stable, versioned op name, for example yasp.kernel::stem_v3.
+- source_ops: the aten ops it replaces, for example
+  ["aten.batch_norm", "aten.hardswish", "aten.cummax"].
+- Inputs and outputs: names, dtypes, rank, and layout (nchw or channel-last).
+- Attributes and constants, including kernel_size and eps where applicable.
+- A machine-readable shape function expressing output shapes in terms of
+  input shapes and attributes, not just example output shapes.
+- Mutation and aliasing contract; prefer functional semantics with no input
+  mutation, output aliasing, or hidden state.
+- Determinism class: bitwise or tolerance; specify tolerances when applicable.
+- CUDA entry point name and build requirements, including CUDA architecture,
+  nvcc, and ninja requirements.
+- All supported shape and dtype constraints, including fixed-shape and fp32
+  assumptions currently enforced only by TORCH_CHECK strings.
+
+Keep weights and buffers as separate inputs (N_PARAMS/N_BUFFERS), not embedded
+constants or hidden state. Do not autotune or probe variants inside forward;
+hoist that work to an explicit setup phase and record chosen variants in
+describe_ops(). Do not capture CUDA graphs inside forward; if unavoidable,
+declare the capture behavior in describe_ops(). Declare fixed-shape and fp32
+assumptions in the manifest, not only in assertions.
+"""
 
 # What the toolkit authenticates with: YASP_API_KEY (and its deprecated alias YASP_API_TOKEN), and the
 # REGISTRY_KEY minted from it for the install. A process that runs the user's model gets none of them, and
@@ -132,9 +159,12 @@ def kernelgen(state: State) -> State:
         stage = "kernelgen_compile"
         config = state["config"]
         kernel, report = artifacts / KERNEL_FILE, artifacts / REPORT_FILE
+        guidance = artifacts / KERNELGEN_GUIDANCE_FILE
+        guidance.write_text(KERNELGEN_GUIDANCE)
         args = [
             "kernelgen", "compile", "--reference", str(reference), "--gpu-name", config.gpu,
             "--output", str(kernel), "--report", str(report), "--no-progress", "--eval-routing", config.eval_routing,
+            "--config", f"guidance=@{guidance}",
         ]
         logger.info("generating a kernel with kernelgen for %s", config.gpu, extra={"stage": stage})
         try:

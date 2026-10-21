@@ -376,12 +376,19 @@ Then the check confirms your Gaia worker is registered (see "Deploy the Gaia
 worker") and runs the documented generation, the
 [reference alone](https://compile.yasp.ai/help/gaia/generate-your-first-kernel/#step-3-generate)
 with your config's `gpu` as the target and its in-compile evaluations routed to
-your worker:
+your worker. Before compiling, it writes `kernelgen_guidance.txt` in the run
+directory and passes it through the documented
+[`--config guidance=@PATH`](https://compile.yasp.ai/help/reference/kernelgen/#compile)
+setting. The guidance requests a `describe_ops()` manifest in `kernel.py` for
+each fused op, including its export contract, build requirements, and declared
+constraints, with tuning moved out of `forward`. The check does not consume or
+validate that manifest.
 
 ```bash
 yasp-toolkit kernelgen compile --reference .artifact/<run>/model.pt2 --gpu-name "<gpu>" \
     --output .artifact/<run>/kernel.py --report .artifact/<run>/kernelgen_report.json \
-    --no-progress --eval-routing <eval_routing>
+    --no-progress --eval-routing <eval_routing> \
+    --config guidance=@.artifact/<run>/kernelgen_guidance.txt
 ```
 
 No `--source` is passed, so no Python of yours runs on the service's side.
@@ -416,6 +423,7 @@ failure, the files produced before it are kept in that run's directory.
 | `model.engine` | The serialized TensorRT engine, at the configured precision. Specific to this GPU and TensorRT version. |
 | `benchmark.json` | The latency statistics of both sides, the speedup, and the metric values, as printed. |
 | `model.pt2` | The kernelgen reference `yasp-toolkit kernelgen export` wrote from `model.py`. |
+| `kernelgen_guidance.txt` | The guidance the check sends to kernelgen compile. |
 | `kernel.py` | The optimized kernel kernelgen returned (its `module_source.py`). |
 | `kernelgen_report.json` | The kernelgen job's report, as printed by `yasp-toolkit eval inspect`. |
 
